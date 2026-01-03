@@ -1,0 +1,695 @@
+/* ============================================
+   LUNAR LANDER - Vector Arcade Aesthetic
+   Inspired by 1979 Atari + NASA Mission Control
+   ============================================ */
+
+/* Fonts */
+@import url("https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap");
+
+:root {
+    /* Vector colors - phosphorescent green CRT */
+    --vector-primary: #00ff88;
+    --vector-secondary: #00cc66;
+    --vector-highlight: #ffcc00;
+    --vector-danger: #ff4444;
+    --vector-warning: #ffaa00;
+
+    /* Pad viability colors */
+    --color-viable: #00ff00;
+    --color-unviable: #ff3333;
+
+    /* CRT background */
+    --bg-deep: #000a04;
+    --bg-screen: #001208;
+
+    /* HUD colors */
+    --hud-bg: rgba(0, 20, 10, 0.85);
+    --hud-border: rgba(0, 255, 136, 0.3);
+    --hud-text: #00ff88;
+
+    /* Fonts */
+    --font-display: "Orbitron", sans-serif;
+    --font-mono: "Share Tech Mono", monospace;
+
+    /* Glow effects */
+    --glow-primary: 0 0 10px #00ff88, 0 0 20px #00ff8866, 0 0 30px #00ff8833;
+    --glow-highlight: 0 0 10px #ffcc00, 0 0 20px #ffcc0066;
+    --glow-danger: 0 0 10px #ff4444, 0 0 20px #ff444466;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-deep);
+}
+
+body {
+    font-family: "Share Tech Mono", monospace;
+    color: var(--vector-primary);
+}
+
+.app {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: radial-gradient(
+        ellipse at center,
+        var(--bg-screen) 0%,
+        var(--bg-deep) 100%
+    );
+}
+
+/* ============================================
+   GAME CONTAINER
+   ============================================ */
+
+.game-container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    background: var(--bg-screen);
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: hidden;
+
+    /* World theme colors (set via JavaScript) */
+    --world-primary: var(--vector-primary);
+    --world-secondary: var(--vector-secondary);
+    --world-terrain: rgba(100, 100, 100, 0.3);
+    --world-terrain-stroke: rgba(160, 160, 160, 0.5);
+    --world-sky: var(--bg-screen);
+    --world-pad-viable: var(--color-viable);
+    --world-pad-unviable: var(--color-unviable);
+}
+
+.game-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* ============================================
+   CRT OVERLAY EFFECTS
+   ============================================ */
+
+.crt-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: 0;
+    overflow: hidden;
+}
+
+/* Scanlines */
+.scanlines {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 1px,
+        rgba(0, 0, 0, 0.3) 1px,
+        rgba(0, 0, 0, 0.3) 2px
+    );
+    opacity: 0.4;
+}
+
+/* Screen vignette */
+.vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+        ellipse at center,
+        transparent 50%,
+        rgba(0, 0, 0, 0.5) 100%
+    );
+}
+
+/* Subtle flicker animation */
+.flicker {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    animation: flicker 0.15s infinite;
+    opacity: 0.02;
+}
+
+@keyframes flicker {
+    0%,
+    100% {
+        background: transparent;
+    }
+    50% {
+        background: rgba(0, 255, 136, 0.03);
+    }
+}
+
+/* ============================================
+   HUD - HEADS UP DISPLAY
+   ============================================ */
+
+.hud {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+}
+
+.hud-top {
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+}
+
+.hud-title {
+    font-family: "Orbitron", sans-serif;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--vector-secondary);
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+.hud-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+}
+
+.telemetry-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 70px;
+}
+
+.telemetry-block .label {
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--vector-secondary);
+    margin-bottom: 2px;
+}
+
+.telemetry-block .value {
+    font-size: 20px;
+    font-weight: bold;
+    text-shadow: var(--glow-primary);
+}
+
+.telemetry-block .unit {
+    font-size: 8px;
+    color: var(--vector-secondary);
+}
+
+/* Seven segment display style */
+.seven-segment {
+    font-family: "Orbitron", sans-serif;
+}
+
+/* Status colors */
+.value.ok {
+    color: var(--vector-primary);
+    text-shadow: var(--glow-primary);
+}
+.value.warning {
+    color: var(--vector-warning);
+    text-shadow: var(--glow-highlight);
+}
+.value.danger {
+    color: var(--vector-danger);
+    text-shadow: var(--glow-danger);
+}
+
+/* Fuel bar */
+.telemetry-block.fuel {
+    min-width: 100px;
+}
+
+.fuel-bar {
+    width: 80px;
+    height: 12px;
+    border: 1px solid var(--vector-secondary);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 4px 0;
+}
+
+.fuel-fill {
+    height: 100%;
+    transition: width 0.1s;
+    box-shadow: var(--glow-primary);
+}
+
+.fuel-fill.ok {
+    background: var(--vector-primary);
+}
+.fuel-fill.warning {
+    background: var(--vector-warning);
+}
+.fuel-fill.danger {
+    background: var(--vector-danger);
+}
+
+/* ============================================
+   STATUS INDICATORS
+   ============================================ */
+
+.hud-status {
+    margin-top: auto;
+    margin-bottom: 5px;
+}
+
+.status-row {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+}
+
+.indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--vector-secondary);
+    opacity: 0.5;
+}
+
+.indicator.active,
+.indicator.ok {
+    color: var(--vector-primary);
+    opacity: 1;
+}
+
+.indicator.warning {
+    color: var(--vector-warning);
+    opacity: 1;
+}
+
+.indicator .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+}
+
+/* ============================================
+   AUTOPILOT CONTROLS
+   ============================================ */
+
+.hud-autopilot {
+    position: absolute;
+    top: 70px;
+    right: 10px;
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-border);
+    border-radius: 4px;
+    padding: 8px;
+}
+
+.autopilot-label {
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--vector-secondary);
+    margin-bottom: 6px;
+    text-align: center;
+}
+
+.autopilot-modes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.mode-btn {
+    background: transparent;
+    border: 1px solid var(--hud-border);
+    color: var(--vector-secondary);
+    font-family: "Share Tech Mono", monospace;
+    font-size: 10px;
+    padding: 4px 8px;
+    cursor: pointer;
+    pointer-events: auto;
+    transition: all 0.2s;
+}
+
+.mode-btn:hover {
+    border-color: var(--vector-primary);
+    color: var(--vector-primary);
+}
+
+.mode-btn.active {
+    background: rgba(0, 255, 136, 0.2);
+    border-color: var(--vector-primary);
+    color: var(--vector-primary);
+    text-shadow: var(--glow-primary);
+}
+
+/* ============================================
+   GAME MESSAGES
+   ============================================ */
+
+.message {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    padding: 30px 50px;
+    background: var(--hud-bg);
+    border: 2px solid;
+    border-radius: 8px;
+}
+
+.message.crash {
+    border-color: var(--vector-danger);
+    box-shadow: var(--glow-danger);
+}
+
+.message.success {
+    border-color: var(--vector-primary);
+    box-shadow: var(--glow-primary);
+}
+
+.message-title {
+    font-family: "Orbitron", sans-serif;
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+.crash .message-title {
+    color: var(--vector-danger);
+    text-shadow: var(--glow-danger);
+}
+
+.success .message-title {
+    color: var(--vector-primary);
+    text-shadow: var(--glow-primary);
+}
+
+.message-subtitle {
+    font-size: 14px;
+    color: var(--vector-secondary);
+    margin-bottom: 15px;
+}
+
+.message-hint {
+    font-size: 12px;
+    color: var(--vector-secondary);
+    opacity: 0.7;
+}
+
+/* ============================================
+   CONTROLS HELP
+   ============================================ */
+
+.hud-controls {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 15px;
+    font-size: 10px;
+    color: var(--vector-secondary);
+    opacity: 0.6;
+}
+
+/* ============================================
+   SVG STYLES
+   ============================================ */
+
+.lander-body {
+    --vector-primary: #00ff88;
+}
+
+.thrust-flame {
+    opacity: 0.9;
+}
+
+/* ============================================
+   LANDING PAD STYLES
+   ============================================ */
+
+.landing-pad .strobe {
+    animation: strobe 0.5s ease-in-out infinite;
+}
+
+@keyframes strobe {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.3;
+    }
+}
+
+/* ============================================
+   DEMO STATS
+   ============================================ */
+
+.hud-demo-stats {
+    position: absolute;
+    bottom: 50px;
+    left: 10px;
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    min-width: 100px;
+}
+
+.demo-stats-label {
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--vector-secondary);
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+.demo-stats-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.demo-stats-row .stat-value {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--vector-primary);
+    text-shadow: var(--glow-primary);
+    font-family: "Orbitron", sans-serif;
+}
+
+.demo-stats-row .stat-label {
+    font-size: 9px;
+    color: var(--vector-secondary);
+    letter-spacing: 1px;
+}
+
+.demo-stats-row.success-rate {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--hud-border);
+}
+
+.demo-stats-row.success-rate .stat-value {
+    font-size: 20px;
+    color: var(--color-viable);
+}
+
+/* ============================================
+   WORLD SELECTION
+   ============================================ */
+
+.world-select {
+    position: absolute;
+    top: 70px;
+    left: 10px;
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    pointer-events: auto;
+}
+
+.world-select.locked {
+    opacity: 0.5;
+}
+
+.world-select-label {
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--vector-secondary);
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+.world-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.world-btn {
+    background: transparent;
+    border: 1px solid var(--hud-border);
+    color: var(--vector-secondary);
+    font-family: "Share Tech Mono", monospace;
+    font-size: 11px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.world-btn:hover:not(:disabled) {
+    border-color: var(--world-color, var(--vector-primary));
+    color: var(--world-color, var(--vector-primary));
+}
+
+.world-btn.active {
+    background: rgba(0, 255, 136, 0.2);
+    border-color: var(--world-color, var(--vector-primary));
+    color: var(--world-color, var(--vector-primary));
+    text-shadow: 0 0 10px var(--world-color, var(--vector-primary));
+}
+
+.world-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+/* ============================================
+   GAME PHASE INDICATOR
+   ============================================ */
+
+.hud-phase {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: "Orbitron", sans-serif;
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--vector-secondary);
+    text-shadow: var(--glow-primary);
+    padding: 4px 12px;
+    background: var(--hud-bg);
+    border: 1px solid var(--hud-border);
+    border-radius: 4px;
+}
+
+.hud-phase.orbit {
+    color: var(--vector-highlight);
+}
+
+.hud-phase.descent {
+    color: var(--vector-primary);
+}
+
+.hud-phase.abort {
+    color: var(--vector-danger);
+    animation: pulse 0.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* ============================================
+   ABORT INDICATOR
+   ============================================ */
+
+.abort-indicator {
+    position: absolute;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--vector-warning);
+    text-shadow: var(--glow-highlight);
+    padding: 4px 12px;
+    background: var(--hud-bg);
+    border: 1px solid var(--vector-warning);
+    border-radius: 4px;
+    animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+/* ============================================
+   FAILURE REASON DISPLAY
+   ============================================ */
+
+.failure-reason {
+    font-family: "Orbitron", sans-serif;
+    font-size: 14px;
+    color: var(--vector-danger);
+    margin-top: 10px;
+    letter-spacing: 1px;
+}
+
+/* ============================================
+   RESPONSIVE
+   ============================================ */
+
+@media (max-width: 600px) {
+    .hud-row {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .telemetry-block .value {
+        font-size: 16px;
+    }
+
+    .hud-controls {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+    }
+
+    .hud-autopilot {
+        top: auto;
+        bottom: 50px;
+        right: 50%;
+        transform: translateX(50%);
+    }
+
+    .autopilot-modes {
+        flex-direction: row;
+    }
+}
