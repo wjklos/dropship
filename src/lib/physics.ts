@@ -12,6 +12,10 @@ import type {
 /**
  * Update lander physics for one timestep
  * Implements gravity gating - no gravity until first thrust (orbital mechanics)
+ *
+ * ORBITAL MECHANICS:
+ * - Before first burn: stable orbit (constant altitude, can rotate freely)
+ * - After first burn: normal physics with gravity
  */
 export function updatePhysics(
   lander: LanderState,
@@ -36,7 +40,7 @@ export function updatePhysics(
     next.hasBurned = true;
   }
 
-  // Update rotation
+  // Update rotation (always allowed, even in orbit)
   next.angularVelocity += rotationInput * config.rotationSpeed * dt;
   next.angularVelocity *= 0.95; // Angular damping
   next.rotation += next.angularVelocity * dt;
@@ -44,6 +48,25 @@ export function updatePhysics(
   // Normalize rotation to -PI to PI
   while (next.rotation > Math.PI) next.rotation -= 2 * Math.PI;
   while (next.rotation < -Math.PI) next.rotation += 2 * Math.PI;
+
+  // ORBITAL MODE: Before first burn, maintain stable orbit
+  if (!next.hasBurned) {
+    // In orbit: maintain constant altitude, constant horizontal velocity
+    // Only rotation changes - no thrust, no gravity, no position change except horizontal drift
+    next.position.x += next.velocity.x * dt;
+
+    // Wrap horizontal position
+    if (next.position.x < 0) next.position.x += config.width;
+    if (next.position.x > config.width) next.position.x -= config.width;
+
+    // Altitude stays constant (no vertical velocity change)
+    next.velocity.y = 0;
+    next.thrust = 0;
+
+    return next;
+  }
+
+  // DESCENT MODE: Normal physics after first burn
 
   // Calculate thrust (only if fuel available)
   const actualThrust = next.fuel > 0 ? thrustInput * config.maxThrust : 0;
@@ -66,13 +89,9 @@ export function updatePhysics(
     y: -Math.cos(next.rotation) * actualThrust,
   };
 
-  // GRAVITY GATING: Only apply gravity after first burn
-  // This enables stable orbit until player initiates descent
-  const gravityEffect = next.hasBurned ? config.gravity : 0;
-
   // Apply forces (thrust + gravity)
   next.velocity.x += thrustVec.x * dt;
-  next.velocity.y += (thrustVec.y + gravityEffect) * dt;
+  next.velocity.y += (thrustVec.y + config.gravity) * dt;
 
   // Update position
   next.position.x += next.velocity.x * dt;
@@ -82,7 +101,7 @@ export function updatePhysics(
   if (next.position.x < 0) next.position.x += config.width;
   if (next.position.x > config.width) next.position.x -= config.width;
 
-  // Keep in world bounds vertically (for orbit)
+  // Keep in world bounds vertically
   if (next.position.y < 0) {
     next.position.y = 0;
     next.velocity.y = Math.max(0, next.velocity.y);
@@ -128,14 +147,24 @@ export function checkTerrainCollision(
   const rightTerrainY = getTerrainHeightAt(terrain, rightLegX, config.width);
   const centerTerrainY = getTerrainHeightAt(terrain, cx, config.width);
 
-  // Check if each leg is on a pad
+  // Check if each leg is on a pad and get pad surface height
   const leftPadIndex = findPadAtX(leftLegX, landingPads);
   const rightPadIndex = findPadAtX(rightLegX, landingPads);
 
-  // Check for collision (either leg touching terrain)
-  const leftCollision = leftLegY >= leftTerrainY;
-  const rightCollision = rightLegY >= rightTerrainY;
-  const centerCollision = centerY >= centerTerrainY;
+  // Use pad surface height if on a pad, otherwise terrain height
+  // Pad surface is slightly above terrain (pad.y is the top of the pad)
+  const leftSurfaceY =
+    leftPadIndex !== null
+      ? landingPads[leftPadIndex].y - 3 // Pad is 3px tall, land on top
+      : leftTerrainY;
+  const rightSurfaceY =
+    rightPadIndex !== null ? landingPads[rightPadIndex].y - 3 : rightTerrainY;
+  const centerSurfaceY = centerTerrainY;
+
+  // Check for collision (either leg touching surface)
+  const leftCollision = leftLegY >= leftSurfaceY;
+  const rightCollision = rightLegY >= rightSurfaceY;
+  const centerCollision = centerY >= centerSurfaceY;
 
   // No collision yet
   if (!leftCollision && !rightCollision && !centerCollision) {
@@ -191,11 +220,17 @@ export function checkTerrainCollision(
     failureReason = "OUT_OF_FUEL";
   }
 
+  // Determine landing surface height - use pad surface if landing on pad
+  const landingSurfaceY =
+    bothLegsOnSamePad && landedPadIndex !== null
+      ? landingPads[landedPadIndex].y - 3 // Top of pad
+      : centerTerrainY;
+
   return {
     collision: true,
     outcome,
     landedPadIndex,
-    terrainY: centerTerrainY,
+    terrainY: landingSurfaceY,
     failureReason,
   };
 }

@@ -10,6 +10,7 @@ import type {
   GamePhase,
   FailureReason,
   FailureStats,
+  LandingOutcome,
 } from "../lib/types";
 import { generateTerrain, generateStars } from "../lib/terrain";
 import { getAltitude, getSpeed } from "../lib/physics";
@@ -25,6 +26,13 @@ import {
   calculateViewBox,
   canAbortAtAltitude,
 } from "../lib/zoom";
+import {
+  FlightLogger,
+  saveFlightRecord,
+  exportFlightRecords,
+  getFlightStats,
+  clearFlightRecords,
+} from "../lib/flightLogger";
 
 // World dimensions - larger for orbital view
 const WORLD_WIDTH = 2400;
@@ -48,21 +56,26 @@ function createConfig(world: WorldConfig): GameConfig {
   };
 }
 
-// Initial lander state - starts in orbit
+// Initial lander state - starts in orbit, oriented sideways
+// Thruster points opposite to velocity (right) to enable retrograde burn
 function createInitialLander(
   config: GameConfig,
   world: WorldConfig,
 ): LanderState {
+  // Position high but visible below HUD (approx 150px from top of viewport)
+  // With viewHeight 1200 at orbital zoom, y=150 keeps lander visible
+  const orbitalY = 150;
+
   return {
     position: {
       x: config.width * 0.1, // Start on the left side
-      y: config.height - world.orbitalAltitude, // High orbit (remember Y increases downward)
+      y: orbitalY, // High up but visible below HUD
     },
     velocity: {
-      x: world.orbitalVelocity, // Horizontal orbital velocity
+      x: world.orbitalVelocity, // Horizontal orbital velocity (moving right)
       y: 0, // No vertical velocity in orbit
     },
-    rotation: 0,
+    rotation: -Math.PI / 2, // -90° - thrust points RIGHT (opposite to velocity direction)
     angularVelocity: 0,
     fuel: 100,
     thrust: 0,
@@ -147,6 +160,60 @@ export function createGameStore() {
   // Last failure reason for display
   const [lastFailureReason, setLastFailureReason] =
     createSignal<FailureReason>(null);
+
+  // Flight logger - tracks current flight for analysis
+  let flightLogger: FlightLogger | null = null;
+
+  // Initialize flight logger for a new flight
+  function initFlightLogger() {
+    const pads = landingPads();
+    const viabilities = padViabilities();
+    const targetPad =
+      viabilities.length > 0
+        ? selectTargetPad(viabilities, pads)
+        : { pad: pads[0], index: 0, viable: true };
+
+    flightLogger = new FlightLogger(
+      worldId(),
+      autopilotMode(),
+      lander(),
+      targetPad.pad,
+      targetPad.index,
+    );
+  }
+
+  // Update flight logger with current state
+  function updateFlightLogger() {
+    if (flightLogger) {
+      flightLogger.update(lander(), altitude(), gamePhase(), gameTime());
+    }
+  }
+
+  // Finalize and save flight log
+  function finalizeFlightLog(
+    outcome: LandingOutcome | null,
+    failureReason: FailureReason,
+    landedPadIndex: number | null,
+  ) {
+    if (flightLogger) {
+      const record = flightLogger.finalize(
+        lander(),
+        altitude(),
+        outcome,
+        failureReason,
+        landedPadIndex,
+      );
+      saveFlightRecord(record);
+      flightLogger = null;
+    }
+  }
+
+  // Record abort in flight log
+  function recordAbortInLog() {
+    if (flightLogger) {
+      flightLogger.recordAbort();
+    }
+  }
 
   // Derived values (memos)
   const altitude = createMemo(() =>
@@ -292,6 +359,7 @@ export function createGameStore() {
       return;
     }
     setGamePhase("abort");
+    recordAbortInLog();
   }
 
   // Complete abort - back in orbit
@@ -403,6 +471,10 @@ export function createGameStore() {
         // Abort on Escape key
         initiateAbort();
         break;
+      case "l":
+        // Export flight logs
+        exportFlightRecords();
+        break;
     }
   }
 
@@ -484,6 +556,15 @@ export function createGameStore() {
     resetDemoStats,
     handleKeyDown,
     handleKeyUp,
+
+    // Flight logging
+    initFlightLogger,
+    updateFlightLogger,
+    finalizeFlightLog,
+    recordAbortInLog,
+    exportFlightRecords,
+    getFlightStats,
+    clearFlightRecords,
   };
 }
 

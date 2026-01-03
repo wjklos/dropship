@@ -52,28 +52,70 @@ const Terrain: Component<TerrainProps> = (props) => {
               ? "var(--world-pad-viable)"
               : "var(--world-pad-unviable)";
           const padCenter = () => (pad.x1 + pad.x2) / 2;
+          const padWidth = () => pad.x2 - pad.x1;
+          const padHeight = 3; // Height of hatched rectangle
 
           return (
             <g class="landing-pad" classList={{ selected: isSelected() }}>
-              {/* Pad surface */}
-              <line
-                x1={pad.x1}
-                y1={pad.y}
-                x2={pad.x2}
-                y2={pad.y}
+              {/* Hatched rectangle pad - solid outline with diagonal lines inside */}
+              <rect
+                x={pad.x1}
+                y={pad.y - padHeight}
+                width={padWidth()}
+                height={padHeight}
+                fill="none"
                 stroke={padColor()}
-                stroke-width="4"
-                stroke-linecap="round"
+                stroke-width="2"
                 filter="url(#glow-highlight)"
                 class={isSelected() ? "strobe" : ""}
               />
 
-              {/* Pad markers */}
+              {/* Diagonal hatch lines inside the pad */}
+              <g clip-path={`url(#pad-clip-${index()})`}>
+                <defs>
+                  <clipPath id={`pad-clip-${index()}`}>
+                    <rect
+                      x={pad.x1}
+                      y={pad.y - padHeight}
+                      width={padWidth()}
+                      height={padHeight}
+                    />
+                  </clipPath>
+                </defs>
+                {/* Create diagonal hatch pattern */}
+                {Array.from({ length: Math.ceil(padWidth() / 6) + 2 }).map(
+                  (_, i) => (
+                    <line
+                      x1={pad.x1 + i * 6 - padHeight}
+                      y1={pad.y}
+                      x2={pad.x1 + i * 6}
+                      y2={pad.y - padHeight}
+                      stroke={padColor()}
+                      stroke-width="1"
+                      opacity="0.7"
+                    />
+                  ),
+                )}
+              </g>
+
+              {/* Brightened top edge for depth */}
               <line
                 x1={pad.x1}
-                y1={pad.y}
+                y1={pad.y - padHeight}
+                x2={pad.x2}
+                y2={pad.y - padHeight}
+                stroke="white"
+                stroke-width="1"
+                opacity="0.5"
+                filter="url(#glow)"
+              />
+
+              {/* Side markers extending up */}
+              <line
+                x1={pad.x1}
+                y1={pad.y - padHeight}
                 x2={pad.x1}
-                y2={pad.y - 10}
+                y2={pad.y - 12}
                 stroke={padColor()}
                 stroke-width="2"
                 filter="url(#glow-highlight)"
@@ -81,9 +123,9 @@ const Terrain: Component<TerrainProps> = (props) => {
               />
               <line
                 x1={pad.x2}
-                y1={pad.y}
+                y1={pad.y - padHeight}
                 x2={pad.x2}
-                y2={pad.y - 10}
+                y2={pad.y - 12}
                 stroke={padColor()}
                 stroke-width="2"
                 filter="url(#glow-highlight)"
@@ -95,7 +137,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 x1={padCenter()}
                 y1={pad.y - 15}
                 x2={padCenter()}
-                y2={pad.y - 5}
+                y2={pad.y - 8}
                 stroke={padColor()}
                 stroke-width="2"
                 filter="url(#glow-highlight)"
@@ -115,31 +157,39 @@ const Terrain: Component<TerrainProps> = (props) => {
                 {pad.multiplier}x
               </text>
 
-              {/* Glide path guides - vertical lines from selected pad */}
-              {isSelected() && (
-                <>
-                  <line
-                    x1={pad.x1}
-                    y1={pad.y - 10}
-                    x2={pad.x1}
-                    y2={0}
-                    stroke={padColor()}
-                    stroke-width="1"
-                    stroke-dasharray="4 8"
-                    opacity="0.3"
-                  />
-                  <line
-                    x1={pad.x2}
-                    y1={pad.y - 10}
-                    x2={pad.x2}
-                    y2={0}
-                    stroke={padColor()}
-                    stroke-width="1"
-                    stroke-dasharray="4 8"
-                    opacity="0.3"
-                  />
-                </>
-              )}
+              {/* Vertical broadcast lines - always visible from orbit */}
+              <line
+                x1={pad.x1}
+                y1={pad.y - 12}
+                x2={pad.x1}
+                y2={0}
+                stroke={padColor()}
+                stroke-width="1"
+                stroke-dasharray="6 12"
+                opacity={isSelected() ? "0.5" : "0.2"}
+              />
+              <line
+                x1={pad.x2}
+                y1={pad.y - 12}
+                x2={pad.x2}
+                y2={0}
+                stroke={padColor()}
+                stroke-width="1"
+                stroke-dasharray="6 12"
+                opacity={isSelected() ? "0.5" : "0.2"}
+              />
+              {/* Center guide line - brighter for selected pad */}
+              <line
+                x1={padCenter()}
+                y1={pad.y - 22}
+                x2={padCenter()}
+                y2={0}
+                stroke={padColor()}
+                stroke-width={isSelected() ? "2" : "1"}
+                stroke-dasharray={isSelected() ? "4 6" : "2 10"}
+                opacity={isSelected() ? "0.6" : "0.15"}
+                filter={isSelected() ? "url(#glow)" : "none"}
+              />
             </g>
           );
         }}

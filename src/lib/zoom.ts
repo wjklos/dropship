@@ -6,14 +6,16 @@
  * altitudes zoom in for precision landing.
  */
 
-import type { ZoomLevel } from './types';
+import type { ZoomLevel } from "./types";
 
 // Zoom levels - ordered from highest altitude to lowest
+// World is 2400x1200, orbital altitude is 800px above terrain
 export const ZOOM_LEVELS: ZoomLevel[] = [
-  { altitudeThreshold: 600, scale: 1, viewHeight: 1200 },   // Orbital view
-  { altitudeThreshold: 300, scale: 2, viewHeight: 600 },    // Approach
-  { altitudeThreshold: 100, scale: 3, viewHeight: 400 },    // Descent
-  { altitudeThreshold: 0, scale: 4, viewHeight: 300 },      // Final approach
+  { altitudeThreshold: 500, scale: 0.5, viewHeight: 1200 }, // Orbital view - shows full world height
+  { altitudeThreshold: 250, scale: 1, viewHeight: 800 }, // High approach
+  { altitudeThreshold: 100, scale: 2, viewHeight: 500 }, // Descent
+  { altitudeThreshold: 40, scale: 3, viewHeight: 350 }, // Low approach
+  { altitudeThreshold: 0, scale: 4, viewHeight: 250 }, // Final approach
 ];
 
 // Abort threshold - can't abort below this altitude (matches first zoom transition)
@@ -42,7 +44,7 @@ export function calculateViewBox(
   worldWidth: number,
   worldHeight: number,
   zoomLevel: ZoomLevel,
-  aspectRatio: number,  // window width / height
+  aspectRatio: number, // window width / height
 ): { x: number; y: number; width: number; height: number } {
   const viewHeight = zoomLevel.viewHeight;
   const viewWidth = viewHeight * aspectRatio;
@@ -63,7 +65,7 @@ export function calculateViewBox(
     x: Math.max(0, viewX),
     y: Math.max(0, viewY),
     width: finalWidth,
-    height: finalHeight
+    height: finalHeight,
   };
 }
 
@@ -74,7 +76,7 @@ export function calculateViewBox(
 export function getZoomTransition(
   altitude: number,
   currentLevel: ZoomLevel,
-  transitionRange: number = 50  // Altitude range over which to transition
+  transitionRange: number = 50, // Altitude range over which to transition
 ): number {
   const threshold = currentLevel.altitudeThreshold;
   if (altitude >= threshold + transitionRange) {

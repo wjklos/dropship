@@ -112,7 +112,36 @@ export function computeAutopilot(
     // Calculate what tilt we need to correct our trajectory
     // Scale corrections by gravity factor (higher gravity needs more aggressive corrections)
 
-    if (altitude > 100) {
+    if (altitude > 200) {
+      // VERY HIGH ALTITUDE: Aggressive horizontal correction
+      // Allow larger tilt angles to build horizontal velocity early
+      if (horizontalDistance > 50) {
+        const desiredVel =
+          Math.sign(horizontalError) *
+          Math.min(40 * gravityFactor, horizontalDistance * 0.2);
+        const velError = desiredVel - horizontalVelocity;
+        // More aggressive tilt - up to 30 degrees
+        targetRotation = Math.max(
+          -0.52,
+          Math.min(0.52, velError * 0.03 * gravityFactor),
+        );
+      } else if (horizontalDistance > 20) {
+        const desiredVel =
+          Math.sign(horizontalError) *
+          Math.min(20 * gravityFactor, horizontalDistance * 0.15);
+        const velError = desiredVel - horizontalVelocity;
+        targetRotation = Math.max(
+          -0.4,
+          Math.min(0.4, velError * 0.025 * gravityFactor),
+        );
+      } else {
+        // Close to target, arrest horizontal velocity
+        targetRotation = Math.max(
+          -0.25,
+          Math.min(0.25, -horizontalVelocity * 0.04),
+        );
+      }
+    } else if (altitude > 100) {
       // HIGH ALTITUDE: Correct horizontal position
       if (horizontalDistance > 30) {
         const desiredVel =
@@ -121,37 +150,45 @@ export function computeAutopilot(
         const velError = desiredVel - horizontalVelocity;
         targetRotation = Math.max(
           -0.35,
-          Math.min(0.35, velError * 0.02 * gravityFactor),
+          Math.min(0.35, velError * 0.025 * gravityFactor),
         );
       } else {
         targetRotation = Math.max(
           -0.2,
-          Math.min(0.2, -horizontalVelocity * 0.03),
+          Math.min(0.2, -horizontalVelocity * 0.035),
         );
       }
     } else if (altitude > 40) {
-      // MID ALTITUDE: Gentle corrections only
+      // MID ALTITUDE: Moderate corrections
       if (horizontalDistance > 15) {
         const desiredVel =
           Math.sign(horizontalError) *
-          Math.min(10 * gravityFactor, horizontalDistance * 0.1);
+          Math.min(12 * gravityFactor, horizontalDistance * 0.12);
         const velError = desiredVel - horizontalVelocity;
         targetRotation = Math.max(
-          -0.15,
-          Math.min(0.15, velError * 0.025 * gravityFactor),
+          -0.18,
+          Math.min(0.18, velError * 0.03 * gravityFactor),
         );
       } else {
         targetRotation = Math.max(
-          -0.1,
-          Math.min(0.1, -horizontalVelocity * 0.04),
+          -0.12,
+          Math.min(0.12, -horizontalVelocity * 0.04),
         );
       }
     } else {
-      // LOW ALTITUDE: Stay upright, tiny corrections only
-      targetRotation = Math.max(
-        -0.06,
-        Math.min(0.06, -horizontalVelocity * 0.02),
-      );
+      // LOW ALTITUDE: Stay upright, small corrections only
+      // Prioritize vertical alignment but still correct drift
+      if (horizontalDistance > 10) {
+        targetRotation = Math.max(
+          -0.08,
+          Math.min(0.08, -horizontalVelocity * 0.025 + horizontalError * 0.002),
+        );
+      } else {
+        targetRotation = Math.max(
+          -0.06,
+          Math.min(0.06, -horizontalVelocity * 0.02),
+        );
+      }
     }
   }
 

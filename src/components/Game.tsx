@@ -148,7 +148,12 @@ const Game: Component = () => {
     // Transition from orbit to descent on first burn
     if (phase === "orbit" && newLander.hasBurned && !lander.hasBurned) {
       store.startDescent();
+      // Initialize flight logger when descent begins
+      store.initFlightLogger();
     }
+
+    // Update flight logger every frame
+    store.updateFlightLogger();
 
     // Check collisions
     const collision = checkTerrainCollision(
@@ -178,6 +183,8 @@ const Game: Component = () => {
           },
         });
         store.setGamePhase("landed");
+        // Finalize flight log
+        store.finalizeFlightLog("success", null, collision.landedPadIndex);
 
         if (isDemo) {
           store.recordDemoResult(true, null);
@@ -200,6 +207,8 @@ const Game: Component = () => {
           },
         });
         store.setGamePhase("landed");
+        // Finalize flight log
+        store.finalizeFlightLog("damaged", collision.failureReason, null);
 
         if (isDemo) {
           store.recordDemoResult(false, collision.failureReason);
@@ -215,6 +224,8 @@ const Game: Component = () => {
           failureReason: collision.failureReason,
         });
         store.setGamePhase("crashed");
+        // Finalize flight log
+        store.finalizeFlightLog("crashed", collision.failureReason, null);
 
         if (isDemo) {
           store.recordDemoResult(false, collision.failureReason);
@@ -333,7 +344,7 @@ const Game: Component = () => {
         />
 
         {/* Lander */}
-        <Lander lander={store.lander()} />
+        <Lander lander={store.lander()} zoomLevel={store.currentZoom()} />
       </svg>
 
       {/* HUD Overlay */}
@@ -351,6 +362,7 @@ const Game: Component = () => {
         landed={store.lander().landed}
         demoAttempts={store.demoAttempts()}
         demoSuccesses={store.demoSuccesses()}
+        demoDamaged={store.demoDamaged()}
         gamePhase={store.gamePhase()}
         worldName={store.world().name}
         worldGravity={store.world().realGravity}

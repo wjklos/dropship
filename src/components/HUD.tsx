@@ -26,6 +26,7 @@ interface HUDProps {
   landed: boolean;
   demoAttempts: number;
   demoSuccesses: number;
+  demoDamaged: number;
   // New props
   gamePhase: GamePhase;
   worldName: string;
@@ -257,11 +258,15 @@ const HUD: Component<HUDProps> = (props) => {
             <span class="stat-value">{props.demoSuccesses}</span>
             <span class="stat-label">LANDED</span>
           </div>
+          <div class="demo-stats-row damaged">
+            <span class="stat-value">{props.demoDamaged}</span>
+            <span class="stat-label">DAMAGED</span>
+          </div>
           <div class="demo-stats-row">
             <span class="stat-value">
-              {props.demoAttempts - props.demoSuccesses}
+              {props.demoAttempts - props.demoSuccesses - props.demoDamaged}
             </span>
-            <span class="stat-label">FAILED</span>
+            <span class="stat-label">CRASHED</span>
           </div>
           <div class="demo-stats-row">
             <span class="stat-value">{props.demoAttempts}</span>

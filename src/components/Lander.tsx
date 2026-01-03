@@ -1,11 +1,24 @@
 import { Component, createMemo, Show } from "solid-js";
-import type { LanderState } from "../lib/types";
+import type { LanderState, ZoomLevel } from "../lib/types";
 
 interface LanderProps {
   lander: LanderState;
+  zoomLevel: ZoomLevel;
 }
 
 const Lander: Component<LanderProps> = (props) => {
+  // Scale lander based on zoom level
+  // When zoomed out (orbital), lander appears smaller
+  // When zoomed in (landing), lander appears normal size
+  const landerScale = createMemo(() => {
+    // Base scale is 1 at viewHeight 250 (most zoomed in)
+    // Scale down proportionally as viewHeight increases
+    const baseViewHeight = 250;
+    const scale = baseViewHeight / props.zoomLevel.viewHeight;
+    // Clamp between 0.35 (small but visible in orbit) and 1.0 (full size at landing)
+    return Math.max(0.35, Math.min(1.0, scale));
+  });
+
   // Thrust flame animation
   const flameLength = createMemo(() => {
     const base = 15;
@@ -21,7 +34,8 @@ const Lander: Component<LanderProps> = (props) => {
   const transform = createMemo(() => {
     const { x, y } = props.lander.position;
     const rotation = props.lander.rotation * (180 / Math.PI);
-    return `translate(${x}, ${y}) rotate(${rotation})`;
+    const scale = landerScale();
+    return `translate(${x}, ${y}) rotate(${rotation}) scale(${scale})`;
   });
 
   return (
