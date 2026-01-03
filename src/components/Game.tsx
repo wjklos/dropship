@@ -6,12 +6,14 @@ import {
   computeStabilizeOnly,
   selectTargetPad,
   computeAbortManeuver,
+  computeGNCAutopilot,
 } from "../lib/autopilot";
 import { WORLDS } from "../lib/worlds";
 import Lander from "./Lander";
 import Terrain from "./Terrain";
 import HUD from "./HUD";
 import CRTOverlay from "./CRTOverlay";
+import TrajectoryOverlay from "./TrajectoryOverlay";
 
 const PHYSICS_TIMESTEP = 1 / 60; // 60 Hz physics
 
@@ -62,6 +64,11 @@ const Game: Component = () => {
 
       // Update pad viabilities after physics
       store.updateViabilities();
+
+      // Update trajectory prediction (every few frames for performance)
+      if (Math.floor(store.gameTime() * 10) % 2 === 0) {
+        store.updateTrajectoryPrediction();
+      }
     }
 
     animationFrameId = requestAnimationFrame(gameLoop);
@@ -104,29 +111,48 @@ const Game: Component = () => {
       // Get the target pad for autopilot
       const pads = store.landingPads();
       const viabilities = store.padViabilities();
-      const targetPad =
+      const targetPadInfo =
         viabilities.length > 0
-          ? selectTargetPad(viabilities, pads)
+          ? selectTargetPad(
+              viabilities,
+              pads,
+              lander.position.x,
+              lander.velocity.x,
+              config.width,
+            )
           : { pad: pads[0], index: 0, viable: true };
 
-      const command =
-        autopilot === "stabilize"
-          ? computeStabilizeOnly(lander)
-          : computeAutopilot(
-              lander,
-              store.terrain(),
-              targetPad.pad,
-              config,
-              autopilot as "stabilize" | "land" | "demo",
-              phase,
-              world.autopilotGains,
-            );
-
-      // For stabilize mode, allow manual thrust override
       if (autopilot === "stabilize") {
+        // Stabilize mode - just attitude control, manual thrust
+        const command = computeStabilizeOnly(lander);
         thrustInput = input.thrust ? 1 : 0;
         rotationInput = command.rotation;
       } else {
+        // Land/Demo mode - use GNC autopilot with computed burns
+        let gncState = store.gncState();
+
+        // Update target pad in GNC state if not locked
+        // IMPORTANT: We must create a new state object to persist the change
+        if (
+          !gncState.targetPadLocked &&
+          gncState.targetPadIndex !== targetPadInfo.index
+        ) {
+          gncState = { ...gncState, targetPadIndex: targetPadInfo.index };
+        }
+
+        const { command, newState } = computeGNCAutopilot(
+          lander,
+          store.terrain(),
+          pads,
+          config,
+          gncState,
+          store.gameTime(),
+          world.autopilotGains,
+        );
+
+        // Update GNC state
+        store.setGNCState(newState);
+
         thrustInput = command.thrust;
         rotationInput = command.rotation;
       }
@@ -339,8 +365,26 @@ const Game: Component = () => {
           landingPads={store.landingPads()}
           padViabilities={store.padViabilities()}
           selectedPadIndex={store.selectedPadIndex()}
+          lockedPadIndex={
+            store.gncState().targetPadLocked
+              ? store.gncState().targetPadIndex
+              : null
+          }
+          lockedPadViable={store.gncState().lockedPadViable}
+          landingCone={store.landingCone()}
           width={store.config().width}
           height={store.config().height}
+        />
+
+        {/* Trajectory Prediction Overlay */}
+        <TrajectoryOverlay
+          prediction={store.trajectoryPrediction()}
+          targetPad={store.targetPad()}
+          optimalBurnPoint={store.optimalBurnPoint()}
+          windowOpensIn={store.insertionWindowTime()}
+          showTrajectory={store.showTrajectory()}
+          phase={store.gamePhase()}
+          worldWidth={store.config().width}
         />
 
         {/* Lander */}

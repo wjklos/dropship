@@ -320,6 +320,8 @@ const HUD: Component<HUDProps> = (props) => {
         <span>[A] Abort</span>
         <span>[P] Pause</span>
         <span>[R] Reset</span>
+        <span>[C] Arc</span>
+        <span>[L] Log</span>
       </div>
     </div>
   );

@@ -116,12 +116,24 @@ function generateLandingPads(
 
     padY = padPointCount > 0 ? padY / padPointCount : baseY;
 
+    // 20% chance pad is occupied by a rocket awaiting takeoff
+    const occupied = Math.random() < 0.2;
+
     pads.push({
       x1: padStart,
       x2: padEnd,
       y: padY,
       multiplier,
+      occupied,
     });
+  }
+
+  // Ensure at least one pad is NOT occupied (so landing is possible)
+  const hasFreePad = pads.some((p) => !p.occupied);
+  if (!hasFreePad && pads.length > 0) {
+    // Make a random pad free
+    const freeIndex = Math.floor(Math.random() * pads.length);
+    pads[freeIndex].occupied = false;
   }
 
   return pads;

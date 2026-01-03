@@ -14,7 +14,14 @@ import type {
 } from "../lib/types";
 import { generateTerrain, generateStars } from "../lib/terrain";
 import { getAltitude, getSpeed } from "../lib/physics";
-import { evaluateAllPads, selectTargetPad } from "../lib/autopilot";
+import {
+  evaluateAllPads,
+  selectTargetPad,
+  selectTargetPadWithCone,
+  createGNCState,
+  type GNCState,
+  type LandingConeResult,
+} from "../lib/autopilot";
 import {
   WORLDS,
   getWorld,
@@ -33,6 +40,11 @@ import {
   getFlightStats,
   clearFlightRecords,
 } from "../lib/flightLogger";
+import {
+  predictTrajectory,
+  findInsertionWindow,
+  type TrajectoryPrediction,
+} from "../lib/trajectory";
 
 // World dimensions - larger for orbital view
 const WORLD_WIDTH = 2400;
@@ -75,7 +87,7 @@ function createInitialLander(
       x: world.orbitalVelocity, // Horizontal orbital velocity (moving right)
       y: 0, // No vertical velocity in orbit
     },
-    rotation: -Math.PI / 2, // -90° - thrust points RIGHT (opposite to velocity direction)
+    rotation: -Math.PI / 2, // -90° - tilted LEFT, thrust pushes LEFT (opposite to rightward velocity)
     angularVelocity: 0,
     fuel: 100,
     thrust: 0,
@@ -129,6 +141,8 @@ export function createGameStore() {
   // Pad viability state
   const [padViabilities, setPadViabilities] = createSignal<PadViability[]>([]);
   const [selectedPadIndex, setSelectedPadIndex] = createSignal<number>(0);
+  const [landingCone, setLandingCone] = createSignal<number[]>([]); // Pad indices in the reachable cone
+  const [targetLocked, setTargetLocked] = createSignal<boolean>(false); // Has target been selected for this flight?
 
   // Input state
   const [input, setInput] = createSignal<InputState>({
@@ -168,9 +182,17 @@ export function createGameStore() {
   function initFlightLogger() {
     const pads = landingPads();
     const viabilities = padViabilities();
+    const currentLander = lander();
+    const cfg = config();
     const targetPad =
       viabilities.length > 0
-        ? selectTargetPad(viabilities, pads)
+        ? selectTargetPad(
+            viabilities,
+            pads,
+            currentLander.position.x,
+            currentLander.velocity.x,
+            cfg.width,
+          )
         : { pad: pads[0], index: 0, viable: true };
 
     flightLogger = new FlightLogger(
@@ -214,6 +236,92 @@ export function createGameStore() {
       flightLogger.recordAbort();
     }
   }
+
+  // Trajectory prediction state
+  const [trajectoryPrediction, setTrajectoryPrediction] =
+    createSignal<TrajectoryPrediction | null>(null);
+  const [optimalBurnPoint, setOptimalBurnPoint] = createSignal<number | null>(
+    null,
+  );
+  const [insertionWindowTime, setInsertionWindowTime] = createSignal<number>(0);
+  const [showTrajectory, setShowTrajectory] = createSignal<boolean>(true);
+
+  // GNC Autopilot state
+  const [gncState, setGNCState] = createSignal<GNCState>(createGNCState());
+
+  // Update trajectory prediction (called from game loop)
+  function updateTrajectoryPrediction() {
+    const currentLander = lander();
+    const cfg = config();
+    const terr = terrain();
+    const pads = landingPads();
+
+    // Only predict if lander is alive and not landed
+    if (!currentLander.alive || currentLander.landed) {
+      setTrajectoryPrediction(null);
+      return;
+    }
+
+    // Get target pad
+    const viabilities = padViabilities();
+    const targetPadInfo =
+      viabilities.length > 0
+        ? selectTargetPad(
+            viabilities,
+            pads,
+            currentLander.position.x,
+            currentLander.velocity.x,
+            cfg.width,
+          )
+        : { pad: pads[0], index: 0, viable: true };
+
+    // Predict trajectory (no burn - just ballistic)
+    const prediction = predictTrajectory(
+      currentLander,
+      cfg,
+      terr,
+      pads,
+      null, // No burn for current prediction
+      30, // 30 seconds max
+      0.05, // Fine timestep for accuracy
+    );
+
+    setTrajectoryPrediction(prediction);
+
+    // Calculate insertion window if in orbit
+    if (gamePhase() === "orbit" && !currentLander.hasBurned) {
+      const window = findInsertionWindow(
+        currentLander,
+        cfg,
+        terr,
+        targetPadInfo.pad,
+      );
+      setOptimalBurnPoint(window.optimalBurnPoint);
+      setInsertionWindowTime(window.windowOpensIn);
+    } else {
+      setOptimalBurnPoint(null);
+      setInsertionWindowTime(0);
+    }
+  }
+
+  // Get current target pad
+  const targetPad = createMemo(() => {
+    const pads = landingPads();
+    const viabilities = padViabilities();
+    const l = lander();
+    const cfg = config();
+    if (viabilities.length > 0) {
+      const target = selectTargetPad(
+        viabilities,
+        pads,
+        l.position.x,
+        l.velocity.x,
+        cfg.width,
+      );
+      return target.pad;
+    }
+    return pads.length > 0 ? pads[0] : null;
+  });
 
   // Derived values (memos)
   const altitude = createMemo(() =>
@@ -298,9 +406,42 @@ export function createGameStore() {
     );
     setPadViabilities(viabilities);
 
-    // Select best target pad
-    const target = selectTargetPad(viabilities, pads);
-    setSelectedPadIndex(target.index);
+    // Select best target pad with cone analysis
+    // Randomize only if:
+    // 1. Target not yet locked AND
+    // 2. Autopilot is engaged (demo/land mode) AND
+    // 3. Still in orbit (hasn't burned yet) - has time to be selective
+    // If autopilot engaged during descent, pick safest (nearest viable) option
+    const isAutoMode = autopilotMode() === "demo" || autopilotMode() === "land";
+    const inOrbit = !currentLander.hasBurned;
+    const shouldRandomize = !targetLocked() && isAutoMode && inOrbit;
+
+    const coneResult = selectTargetPadWithCone(
+      viabilities,
+      pads,
+      currentLander.position.x,
+      currentLander.velocity.x,
+      cfg.width,
+      shouldRandomize,
+    );
+
+    // Update landing cone for visualization
+    setLandingCone(coneResult.cone);
+
+    // Lock target when autopilot is engaged and we have a good cone to choose from
+    // Wait for at least 2 pads in cone before locking - simulates pilot selecting target
+    // This gives time for the cone to populate so randomization is meaningful
+    const minPadsForLock = 2;
+    const coneReady = coneResult.cone.length >= minPadsForLock;
+
+    if (isAutoMode && !targetLocked() && coneReady) {
+      setTargetLocked(true);
+      setSelectedPadIndex(coneResult.selected.index);
+    } else if (!targetLocked()) {
+      // Update target if not locked yet (for manual mode or cone not ready)
+      setSelectedPadIndex(coneResult.selected.index);
+    }
+    // If already locked, don't change selectedPadIndex
   }
 
   // Change world (only allowed before first burn)
@@ -340,11 +481,16 @@ export function createGameStore() {
     setLander(createInitialLander(cfg, currentWorld));
     setPadViabilities([]);
     setSelectedPadIndex(0);
+    setLandingCone([]);
+    setTargetLocked(false); // Reset so next flight picks a new random target
     setGameTime(0);
     setGameOver(false);
     setGamePhase("orbit");
     setPaused(false);
     setLastFailureReason(null);
+
+    // Reset GNC autopilot state
+    setGNCState(createGNCState());
 
     if (preserveMode) {
       setAutopilotMode(currentMode);
@@ -475,6 +621,10 @@ export function createGameStore() {
         // Export flight logs
         exportFlightRecords();
         break;
+      case "c":
+        // Toggle trajectory arc visibility
+        setShowTrajectory((v) => !v);
+        break;
     }
   }
 
@@ -510,6 +660,7 @@ export function createGameStore() {
     landingPads,
     padViabilities,
     selectedPadIndex,
+    landingCone,
     stars,
     input,
     autopilotMode,
@@ -565,6 +716,18 @@ export function createGameStore() {
     exportFlightRecords,
     getFlightStats,
     clearFlightRecords,
+
+    // Trajectory prediction
+    trajectoryPrediction,
+    optimalBurnPoint,
+    insertionWindowTime,
+    updateTrajectoryPrediction,
+    targetPad,
+    showTrajectory,
+
+    // GNC Autopilot
+    gncState,
+    setGNCState,
   };
 }
 

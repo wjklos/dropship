@@ -50,6 +50,7 @@ export interface LandingPad {
   x2: number;
   y: number;
   multiplier: 1 | 2 | 3 | 4 | 5; // Difficulty/reward multiplier (1=easy, 5=hard)
+  occupied: boolean; // If true, a rocket is on this pad - cannot land here
 }
 
 // Viability status for each pad

@@ -179,8 +179,17 @@ export function checkTerrainCollision(
 
   // Collision occurred - determine outcome
   const speed = Math.sqrt(lander.velocity.x ** 2 + lander.velocity.y ** 2);
-  const angleOk = Math.abs(lander.rotation) < config.maxLandingAngle;
+  const absAngle = Math.abs(lander.rotation);
   const speedOk = speed < config.maxLandingVelocity;
+
+  // Angle thresholds (in radians)
+  // ±5° = success, ±6-10° = damaged, >±10° = crash
+  const SUCCESS_ANGLE = (5 * Math.PI) / 180; // 5 degrees
+  const DAMAGED_ANGLE = (10 * Math.PI) / 180; // 10 degrees
+
+  const angleSuccess = absAngle <= SUCCESS_ANGLE;
+  const angleDamaged = absAngle > SUCCESS_ANGLE && absAngle <= DAMAGED_ANGLE;
+  const angleCrash = absAngle > DAMAGED_ANGLE;
 
   // Check fuel status
   const outOfFuel = lander.fuel <= 0;
@@ -191,6 +200,10 @@ export function checkTerrainCollision(
     rightPadIndex !== null &&
     leftPadIndex === rightPadIndex;
 
+  // Check if pad is occupied (landing on occupied pad is a crash)
+  const landingOnOccupiedPad =
+    bothLegsOnSamePad && landingPads[leftPadIndex!].occupied;
+
   let outcome: LandingOutcome;
   let failureReason: FailureReason = null;
   let landedPadIndex: number | null = null;
@@ -198,16 +211,25 @@ export function checkTerrainCollision(
   if (!speedOk) {
     outcome = "crashed";
     failureReason = "VELOCITY_HIGH";
-  } else if (!angleOk) {
+  } else if (angleCrash) {
     outcome = "crashed";
     failureReason = "ANGLE_BAD";
-  } else if (bothLegsOnSamePad) {
-    // Perfect landing - both legs on pad, good speed and angle
+  } else if (landingOnOccupiedPad) {
+    // Landing on occupied pad - crash into the rocket!
+    outcome = "crashed";
+    failureReason = "OFF_PAD"; // Could add "OCCUPIED" reason later
+  } else if (bothLegsOnSamePad && angleSuccess) {
+    // Perfect landing - both legs on pad, good speed, good angle (within ±5°)
     outcome = "success";
     landedPadIndex = leftPadIndex;
-  } else if (speedOk && angleOk) {
-    // Met velocity/angle criteria but not both legs on same pad
-    // This is a DAMAGED landing
+  } else if (bothLegsOnSamePad && angleDamaged) {
+    // Landed on pad but angle was marginal (±6-10°)
+    outcome = "damaged";
+    failureReason = "ANGLE_BAD";
+    landedPadIndex = leftPadIndex;
+  } else if (speedOk && !angleCrash) {
+    // Met velocity criteria, angle not fatal, but not both legs on same pad
+    // This is a DAMAGED landing (off pad)
     outcome = "damaged";
     failureReason = "DAMAGED";
   } else {

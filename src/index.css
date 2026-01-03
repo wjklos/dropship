@@ -269,8 +269,10 @@ body {
    ============================================ */
 
 .hud-status {
-    margin-top: auto;
-    margin-bottom: 5px;
+    position: absolute;
+    bottom: 35px;
+    left: 50%;
+    transform: translateX(-50%);
 }
 
 .status-row {
@@ -421,14 +423,14 @@ body {
 
 .hud-controls {
     position: absolute;
-    bottom: 10px;
+    bottom: 8px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     gap: 15px;
-    font-size: 10px;
+    font-size: 9px;
     color: var(--vector-secondary);
-    opacity: 0.6;
+    opacity: 0.5;
 }
 
 /* ============================================
@@ -461,19 +463,45 @@ body {
     }
 }
 
+/* Flash warning animation for non-viable locked pad (blue/red flash) */
+@keyframes flash-warning {
+    0%,
+    100% {
+        stroke: #4488ff; /* Blue */
+        opacity: 1;
+    }
+    50% {
+        stroke: #ff4444; /* Red */
+        opacity: 0.8;
+    }
+}
+
+.flash-warning {
+    animation: flash-warning 0.5s ease-in-out infinite;
+}
+
+/* Locked pad styling */
+.landing-pad.locked {
+    /* Blue glow effect for locked pads */
+}
+
+.landing-pad.locked-nonviable {
+    /* Handled by flash-warning animation */
+}
+
 /* ============================================
    DEMO STATS
    ============================================ */
 
 .hud-demo-stats {
     position: absolute;
-    bottom: 50px;
+    bottom: 35px;
     left: 10px;
     background: var(--hud-bg);
     border: 1px solid var(--hud-border);
     border-radius: 4px;
-    padding: 8px 12px;
-    min-width: 100px;
+    padding: 6px 10px;
+    min-width: 90px;
 }
 
 .demo-stats-label {
@@ -583,11 +611,11 @@ body {
 
 .hud-phase {
     position: absolute;
-    top: 10px;
+    top: 75px;
     left: 50%;
     transform: translateX(-50%);
     font-family: "Orbitron", sans-serif;
-    font-size: 12px;
+    font-size: 11px;
     letter-spacing: 2px;
     color: var(--vector-secondary);
     text-shadow: var(--glow-primary);
@@ -595,6 +623,7 @@ body {
     background: var(--hud-bg);
     border: 1px solid var(--hud-border);
     border-radius: 4px;
+    z-index: 10;
 }
 
 .hud-phase.orbit {
@@ -626,14 +655,14 @@ body {
 
 .abort-indicator {
     position: absolute;
-    bottom: 80px;
+    bottom: 60px;
     left: 50%;
     transform: translateX(-50%);
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 1px;
     color: var(--vector-warning);
     text-shadow: var(--glow-highlight);
-    padding: 4px 12px;
+    padding: 3px 10px;
     background: var(--hud-bg);
     border: 1px solid var(--vector-warning);
     border-radius: 4px;
