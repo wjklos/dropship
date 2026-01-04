@@ -15,12 +15,16 @@ A vector-style lunar lander game built with Solid.js, inspired by the 1979 Atari
 | Component | Purpose | Location |
 |-----------|---------|----------|
 | Physics Engine | Newtonian simulation with gravity gating for orbital mechanics | `src/lib/physics.ts` |
-| Autopilot System | PD controller with world-specific gains, orbital wait, abort maneuver | `src/lib/autopilot.ts` |
+| GNC Autopilot | Two-burn landing with approach modes (Stop & Drop, Boostback) | `src/lib/autopilot.ts` |
+| Trajectory Prediction | Real-time landing arc and impact point calculation | `src/lib/trajectory.ts` |
 | Terrain Generator | Midpoint displacement algorithm for procedural landscapes | `src/lib/terrain.ts` |
 | World System | Moon/Mars configurations with gravity, colors, autopilot tuning | `src/lib/worlds.ts` |
 | Zoom System | Multi-level zoom based on altitude thresholds | `src/lib/zoom.ts` |
+| Flight Logger | Landing analytics and statistics tracking | `src/lib/flightLogger.ts` |
 | Game State Store | Solid.js signals for reactive state, phase tracking | `src/stores/game.ts` |
 | SVG Renderer | Vector graphics with dynamic viewBox and glow filters | `src/components/*.tsx` |
+| Crash Debris | Explosion animation when lander crashes | `src/components/CrashDebris.tsx` |
+| Trajectory Overlay | Visual landing arc with impact marker | `src/components/TrajectoryOverlay.tsx` |
 | CRT Effects | Scanlines, vignette, flicker via CSS | `src/index.css` |
 
 ### Key Features
@@ -85,6 +89,44 @@ A vector-style lunar lander game built with Solid.js, inspired by the 1979 Atari
     - Tighter stroke widths (1.5px body, 1px details)
     - World-themed terrain colors
     - Enhanced pad highlighting (thicker lines, more glow)
+
+11. **Approach Modes**
+    - **Stop & Drop** [S]: Kill horizontal velocity early, then descend vertically
+    - **Boostback** [B]: Coast toward target, then precision braking burn (SpaceX-style)
+    - Selectable during autopilot modes via HUD buttons or keyboard
+
+12. **Landing Cone System**
+    - Real-time calculation of reachable pads based on velocity and position
+    - Cyan highlighting for pads in the landing cone
+    - Blue targeting crosshairs on locked pad only
+    - Random pad selection from cone when autopilot engages in orbit
+
+13. **Trajectory Prediction Overlay**
+    - Real-time ballistic arc showing predicted flight path
+    - Impact point marker (X) with color coding:
+      - Green: Landing on viable pad
+      - Yellow: Landing on terrain
+      - Red: Landing on occupied pad
+    - Shows insertion window countdown before optimal burn point
+
+14. **Occupied Pads with Rockets**
+    - 20% of pads randomly have parked rockets
+    - Cannot land on occupied pads (treated as crash)
+    - Vector-style rocket graphics matching lander aesthetic
+    - Red X indicator when trajectory crosses occupied pad
+
+15. **Crash & Explosion Effects**
+    - Vector-style thrust flames (animated line segments)
+    - Lander breaks apart on crash (body, legs, engine, RCS all separate)
+    - Each debris piece has random velocity and spin
+    - Debris falls with gravity and fades out
+    - Crashing into occupied pad also explodes the rocket (chain reaction!)
+
+16. **Flight Logging**
+    - Tracks all landing attempts with detailed telemetry
+    - Records approach mode, fuel usage, landing accuracy
+    - Failure reason tracking for analysis
+    - Stored in browser localStorage
 
 ---
 
@@ -166,17 +208,21 @@ lunar-lander/
     ├── App.tsx             # Root component
     ├── components/
     │   ├── Game.tsx        # Main game loop, keyboard handling, zoom
-    │   ├── Lander.tsx      # SVG lander with thrust animation
-    │   ├── Terrain.tsx     # SVG terrain and landing pads (themed)
-    │   ├── HUD.tsx         # Telemetry, phase, world selection, messages
-    │   └── CRTOverlay.tsx  # Scanline/vignette effects
+    │   ├── Lander.tsx      # SVG lander with vector thrust flames
+    │   ├── Terrain.tsx     # SVG terrain, landing pads, parked rockets
+    │   ├── HUD.tsx         # Telemetry, phase, world/approach selection
+    │   ├── CRTOverlay.tsx  # Scanline/vignette effects
+    │   ├── CrashDebris.tsx # Explosion debris animation
+    │   └── TrajectoryOverlay.tsx  # Landing arc prediction display
     ├── lib/
-    │   ├── types.ts        # TypeScript interfaces (extended)
-    │   ├── physics.ts      # Newtonian simulation, gravity gating, dual-leg collision
-    │   ├── autopilot.ts    # PD controller, orbital autopilot, abort maneuver
-    │   ├── terrain.ts      # Procedural generation
+    │   ├── types.ts        # TypeScript interfaces
+    │   ├── physics.ts      # Newtonian simulation, dual-leg collision
+    │   ├── autopilot.ts    # GNC autopilot, approach modes, pad selection
+    │   ├── trajectory.ts   # Trajectory prediction, burn calculations
+    │   ├── terrain.ts      # Procedural generation, occupied pads
     │   ├── worlds.ts       # World configurations (Moon, Mars)
-    │   └── zoom.ts         # Zoom level calculations
+    │   ├── zoom.ts         # Zoom level calculations
+    │   └── flightLogger.ts # Landing analytics and storage
     └── stores/
         └── game.ts         # Solid.js reactive state, phase tracking
 ```
@@ -193,14 +239,21 @@ lunar-lander/
 | `A` / `Escape` | Abort (return to orbit) |
 | `P` | Pause/unpause |
 | `R` | Reset (new terrain, new lander position) |
+| `T` | Toggle trajectory prediction overlay |
 | `1` | Autopilot OFF (full manual) |
 | `2` | Autopilot STABILIZE (attitude hold, manual thrust) |
 | `3` | Autopilot LAND (full autonomous) |
 | `0` | Autopilot DEMO (autonomous + auto-restart + stats) |
+| `S` | Select STOP & DROP approach mode |
+| `B` | Select BOOSTBACK approach mode |
 
 **World Selection** (in orbit only, before first burn):
-- Click world buttons in HUD, or
+- Click world buttons in HUD
 - Selecting Mars changes gravity and color theme
+
+**Approach Modes** (during autopilot):
+- **Stop & Drop**: Traditional vertical descent after killing horizontal velocity
+- **Boostback**: SpaceX-style coast then precision retrograde burn
 
 ---
 
@@ -329,4 +382,4 @@ DESCENT → (collision) → LANDED (success/damaged) | CRASHED
 
 *Last updated: January 2025*
 *Author: Claude (Anthropic)*
-*Version 2.0: Orbital mechanics, multi-world, zoom system*
+*Version 3.0: GNC autopilot, approach modes, trajectory prediction, crash animations*
