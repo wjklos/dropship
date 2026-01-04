@@ -17,6 +17,7 @@ import { getTrajectorySegments } from "../lib/trajectory";
 interface TrajectoryOverlayProps {
   prediction: TrajectoryPrediction | null;
   targetPad: LandingPad | null;
+  landingPads: LandingPad[];
   optimalBurnPoint: number | null;
   windowOpensIn: number;
   showTrajectory: boolean;
@@ -37,9 +38,19 @@ const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
     return props.prediction.impactPoint;
   });
 
-  // Color based on whether we'll hit the pad
+  // Check if impact point is on an occupied pad
+  const impactOnOccupiedPad = createMemo(() => {
+    if (!props.prediction?.impactPoint) return false;
+    const impactX = props.prediction.impactPoint.x;
+    return props.landingPads.some(
+      (pad) => pad.occupied && impactX >= pad.x1 && impactX <= pad.x2,
+    );
+  });
+
+  // Color based on whether we'll hit the pad (red if occupied)
   const trajectoryColor = createMemo(() => {
     if (!props.prediction) return "rgba(255, 255, 0, 0.5)";
+    if (impactOnOccupiedPad()) return "rgba(255, 50, 50, 0.8)"; // Red for occupied pad
     if (props.prediction.onPad) return "rgba(0, 255, 136, 0.7)";
     if (props.prediction.distanceFromPad < 50) return "rgba(255, 200, 0, 0.7)";
     return "rgba(255, 100, 100, 0.6)";

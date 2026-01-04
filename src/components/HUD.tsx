@@ -1,6 +1,7 @@
 import { Component, Show, For, createMemo } from "solid-js";
 import type {
   AutopilotMode,
+  ApproachMode,
   GamePhase,
   FailureReason,
   LandingOutcome,
@@ -37,6 +38,8 @@ interface HUDProps {
   worldLocked: boolean;
   onSelectWorld: (id: WorldId) => void;
   currentWorldId: WorldId;
+  approachMode: ApproachMode;
+  onSelectApproach: (mode: ApproachMode) => void;
 }
 
 // Failure reason display messages
@@ -249,6 +252,29 @@ const HUD: Component<HUDProps> = (props) => {
           </button>
         </div>
       </div>
+
+      {/* Approach mode selector - only show when autopilot is land or demo */}
+      <Show
+        when={props.autopilotMode === "land" || props.autopilotMode === "demo"}
+      >
+        <div class="hud-approach">
+          <div class="approach-label">APPROACH</div>
+          <div class="approach-modes">
+            <button
+              class={`mode-btn approach-btn ${props.approachMode === "stop_drop" ? "active" : ""}`}
+              onClick={() => props.onSelectApproach("stop_drop")}
+            >
+              [S] STOP & DROP
+            </button>
+            <button
+              class={`mode-btn approach-btn ${props.approachMode === "boostback" ? "active" : ""}`}
+              onClick={() => props.onSelectApproach("boostback")}
+            >
+              [B] BOOSTBACK
+            </button>
+          </div>
+        </div>
+      </Show>
 
       {/* Demo stats */}
       <Show when={props.autopilotMode === "demo" || props.demoAttempts > 0}>

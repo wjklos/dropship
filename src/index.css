@@ -363,6 +363,43 @@ body {
 }
 
 /* ============================================
+   APPROACH MODE SELECTOR
+   ============================================ */
+
+.hud-approach {
+    position: absolute;
+    top: 200px;
+    right: 10px;
+    text-align: right;
+    pointer-events: auto;
+}
+
+.approach-label {
+    font-size: 10px;
+    color: var(--hud-label);
+    margin-bottom: 4px;
+    text-align: center;
+}
+
+.approach-modes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.approach-btn {
+    font-size: 9px;
+    padding: 3px 6px;
+}
+
+.approach-btn.active {
+    background: rgba(68, 221, 221, 0.2);
+    border-color: #44dddd;
+    color: #44dddd;
+    text-shadow: 0 0 10px rgba(68, 221, 221, 0.8);
+}
+
+/* ============================================
    GAME MESSAGES
    ============================================ */
 

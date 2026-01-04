@@ -108,19 +108,14 @@ const Game: Component = () => {
     }
     // Handle autopilot modes
     else if (autopilot !== "off") {
-      // Get the target pad for autopilot
+      // Get the target pad from store (already selected/randomized in updateViabilities)
       const pads = store.landingPads();
-      const viabilities = store.padViabilities();
-      const targetPadInfo =
-        viabilities.length > 0
-          ? selectTargetPad(
-              viabilities,
-              pads,
-              lander.position.x,
-              lander.velocity.x,
-              config.width,
-            )
-          : { pad: pads[0], index: 0, viable: true };
+      const selectedIdx = store.selectedPadIndex();
+      const targetPadInfo = {
+        pad: pads[selectedIdx] || pads[0],
+        index: selectedIdx,
+        viable: true,
+      };
 
       if (autopilot === "stabilize") {
         // Stabilize mode - just attitude control, manual thrust
@@ -148,6 +143,7 @@ const Game: Component = () => {
           gncState,
           store.gameTime(),
           world.autopilotGains,
+          store.approachMode(),
         );
 
         // Update GNC state
@@ -380,6 +376,7 @@ const Game: Component = () => {
         <TrajectoryOverlay
           prediction={store.trajectoryPrediction()}
           targetPad={store.targetPad()}
+          landingPads={store.landingPads()}
           optimalBurnPoint={store.optimalBurnPoint()}
           windowOpensIn={store.insertionWindowTime()}
           showTrajectory={store.showTrajectory()}
@@ -416,6 +413,8 @@ const Game: Component = () => {
         worldLocked={store.worldLocked()}
         onSelectWorld={store.selectWorld}
         currentWorldId={store.worldId()}
+        approachMode={store.approachMode()}
+        onSelectApproach={store.setApproachMode}
       />
 
       {/* CRT Effect Overlay */}

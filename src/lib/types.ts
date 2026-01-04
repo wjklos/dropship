@@ -114,6 +114,11 @@ export interface InputState {
 // Autopilot mode
 export type AutopilotMode = "off" | "stabilize" | "land" | "demo";
 
+// Approach mode for GNC autopilot
+// - "stop_drop": Stop, Drop, and Stick It - kill horizontal velocity early, drop vertically
+// - "boostback": SpaceX-style - retain velocity, fly to target, precision landing
+export type ApproachMode = "stop_drop" | "boostback";
+
 // Autopilot state
 export interface AutopilotState {
   mode: AutopilotMode;

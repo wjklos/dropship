@@ -6,6 +6,7 @@ import type {
   TerrainPoint,
   PadViability,
   GamePhase,
+  ApproachMode,
 } from "./types";
 import type { AutopilotGains } from "./worlds";
 import { getAltitude, getTerrainHeightAt, updatePhysics } from "./physics";
@@ -331,6 +332,7 @@ export function computeGNCAutopilot(
   gncState: GNCState,
   gameTime: number,
   gains: AutopilotGains = DEFAULT_GAINS,
+  approachMode: ApproachMode = "stop_drop",
 ): { command: AutopilotCommand; newState: GNCState } {
   const altitude = getAltitude(lander.position, terrain, config.width);
   const state = { ...gncState };
@@ -437,8 +439,17 @@ export function computeGNCAutopilot(
       state.phase = "orbit_wait";
     }
   } else if (!state.deorbitBurnComplete) {
-    // Check if deorbit burn is complete (horizontal velocity killed)
-    if (Math.abs(lander.velocity.x) < 8) {
+    // Check if deorbit burn is complete
+    // For stop_drop: horizontal velocity killed
+    // For boostback: close to target AND horizontal velocity low enough
+    const horizontalVelLow = Math.abs(lander.velocity.x) < 8;
+    const nearTarget = Math.abs(horizontalError) < 100;
+    const boostbackComplete =
+      approachMode === "boostback" &&
+      nearTarget &&
+      Math.abs(lander.velocity.x) < 20;
+
+    if (horizontalVelLow || boostbackComplete) {
       state.deorbitBurnComplete = true;
       state.phase = "coast";
     } else if (state.deorbitBurnStartTime !== null) {
@@ -511,17 +522,64 @@ export function computeGNCAutopilot(
     }
 
     case "deorbit_burn": {
-      // Execute deorbit burn - full retrograde thrust
-      // Retrograde: thrust opposite to velocity direction
-      targetAngle = lander.velocity.x > 0 ? -Math.PI / 2 : Math.PI / 2;
+      if (approachMode === "stop_drop") {
+        // STOP, DROP, AND STICK IT
+        // Execute deorbit burn - full retrograde thrust to kill horizontal velocity
+        targetAngle = lander.velocity.x > 0 ? -Math.PI / 2 : Math.PI / 2;
 
-      // Thrust hard to kill horizontal velocity
-      if (Math.abs(lander.velocity.x) > 20) {
-        targetThrust = 0.9;
-      } else if (Math.abs(lander.velocity.x) > 10) {
-        targetThrust = 0.7;
+        // Thrust hard to kill horizontal velocity
+        if (Math.abs(lander.velocity.x) > 20) {
+          targetThrust = 0.9;
+        } else if (Math.abs(lander.velocity.x) > 10) {
+          targetThrust = 0.7;
+        } else {
+          targetThrust = 0.5;
+        }
       } else {
-        targetThrust = 0.5;
+        // BOOSTBACK - Precision targeting
+        // Only brake enough to arrive at target with near-zero horizontal velocity
+
+        // Calculate stopping distance: d = v² / (2 * a)
+        // At 90° tilt, full thrust is horizontal. Account for ~90% efficiency due to throttle response
+        const horizontalDecel = config.maxThrust * 0.9;
+        const currentSpeed = Math.abs(lander.velocity.x);
+        const stoppingDistance =
+          (currentSpeed * currentSpeed) / (2 * horizontalDecel);
+
+        // How far are we from the target?
+        const distanceToTarget = Math.abs(horizontalError);
+
+        // Account for time to rotate to braking attitude (~1 second at current rotation speed)
+        // During that time we travel: distance = velocity * time
+        const rotationTime = 1.0; // seconds to rotate 90°
+        const travelDuringRotation = currentSpeed * rotationTime;
+
+        // Total margin: rotation travel + safety buffer
+        const brakeMargin = travelDuringRotation + 100; // extra 100px safety
+
+        if (stoppingDistance + brakeMargin >= distanceToTarget) {
+          // Time to brake - thrust retrograde
+          targetAngle = lander.velocity.x > 0 ? -Math.PI / 2 : Math.PI / 2;
+
+          // Modulate thrust based on how urgent the braking is
+          const urgency =
+            (stoppingDistance + travelDuringRotation) /
+            Math.max(distanceToTarget, 1);
+          if (urgency > 1.0) {
+            targetThrust = 1.0; // Emergency braking - we're overshooting!
+          } else if (urgency > 0.8) {
+            targetThrust = 0.9;
+          } else if (urgency > 0.6) {
+            targetThrust = 0.75;
+          } else {
+            targetThrust = 0.5;
+          }
+        } else {
+          // Not yet time to brake - coast toward target
+          // Maintain current orientation, no thrust
+          targetAngle = 0;
+          targetThrust = 0;
+        }
       }
       break;
     }
@@ -1074,12 +1132,26 @@ export function selectTargetPadWithCone(
   // Select from candidates - either random or first viable
   let selected: (typeof candidates)[0] | undefined;
 
-  if (randomize && candidates.length > 1) {
+  if (randomize) {
     // Random selection among ALL candidates in the cone
-    // Don't filter by viability - that's too restrictive early in flight
-    // The autopilot will adapt to reach whichever pad is selected
-    const randomIndex = Math.floor(Math.random() * candidates.length);
-    selected = candidates[randomIndex];
+    console.log(
+      `[PAD SELECT] Randomizing from ${candidates.length} candidates:`,
+      candidates
+        .map((c) => `pad${c.padIndex}@${Math.round(c.forwardDistance)}px`)
+        .join(", "),
+    );
+    if (candidates.length > 1) {
+      const randomIndex = Math.floor(Math.random() * candidates.length);
+      selected = candidates[randomIndex];
+      console.log(
+        `[PAD SELECT] Randomly picked pad ${selected.padIndex} (index ${randomIndex})`,
+      );
+    } else {
+      selected = candidates[0];
+      console.log(
+        `[PAD SELECT] Only 1 candidate, picked pad ${selected?.padIndex}`,
+      );
+    }
   } else {
     // Emergency mode or single candidate - prefer nearest viable pad
     selected = candidates.find((v) => v.viable) || candidates[0];

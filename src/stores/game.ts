@@ -6,6 +6,7 @@ import type {
   LandingPad,
   InputState,
   AutopilotMode,
+  ApproachMode,
   PadViability,
   GamePhase,
   FailureReason,
@@ -153,6 +154,8 @@ export function createGameStore() {
 
   // Autopilot state
   const [autopilotMode, setAutopilotMode] = createSignal<AutopilotMode>("off");
+  const [approachMode, setApproachMode] =
+    createSignal<ApproachMode>("stop_drop");
 
   // Game state
   const [gameTime, setGameTime] = createSignal(0);
@@ -435,13 +438,22 @@ export function createGameStore() {
     const coneReady = coneResult.cone.length >= minPadsForLock;
 
     if (isAutoMode && !targetLocked() && coneReady) {
+      // NOW do the random selection from the full cone and lock it
+      // Re-select with randomization to ensure we pick from all available pads
+      const finalSelection = selectTargetPadWithCone(
+        viabilities,
+        pads,
+        currentLander.position.x,
+        currentLander.velocity.x,
+        cfg.width,
+        true, // Force randomization for final selection
+      );
       setTargetLocked(true);
-      setSelectedPadIndex(coneResult.selected.index);
-    } else if (!targetLocked()) {
-      // Update target if not locked yet (for manual mode or cone not ready)
-      setSelectedPadIndex(coneResult.selected.index);
+      setSelectedPadIndex(finalSelection.selected.index);
+      console.log(`[PAD LOCK] Locked to pad ${finalSelection.selected.index}`);
     }
-    // If already locked, don't change selectedPadIndex
+    // Don't update selectedPadIndex until we lock - prevents overwriting the random selection
+    // The crosshairs will show the locked pad once autopilot engages
   }
 
   // Change world (only allowed before first burn)
@@ -625,6 +637,14 @@ export function createGameStore() {
         // Toggle trajectory arc visibility
         setShowTrajectory((v) => !v);
         break;
+      case "s":
+        // Select Stop & Drop approach
+        setApproachMode("stop_drop");
+        break;
+      case "b":
+        // Select Boostback approach
+        setApproachMode("boostback");
+        break;
     }
   }
 
@@ -665,6 +685,8 @@ export function createGameStore() {
     input,
     autopilotMode,
     setAutopilotMode,
+    approachMode,
+    setApproachMode,
     gameTime,
     setGameTime,
     paused,

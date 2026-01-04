@@ -108,7 +108,7 @@ const Terrain: Component<TerrainProps> = (props) => {
             <g
               class="landing-pad"
               classList={{
-                selected: isSelected(),
+                selected: isLocked(), // Only mark as selected when locked
                 locked: padState() === "locked",
                 "locked-nonviable": padState() === "locked_nonviable",
               }}
@@ -128,7 +128,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 class={
                   padState() === "locked_nonviable"
                     ? "flash-warning"
-                    : isSelected()
+                    : isLocked()
                       ? "strobe"
                       : ""
                 }
@@ -188,7 +188,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 class={
                   padState() === "locked_nonviable"
                     ? "flash-warning"
-                    : isSelected()
+                    : isLocked()
                       ? "strobe"
                       : ""
                 }
@@ -206,7 +206,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 class={
                   padState() === "locked_nonviable"
                     ? "flash-warning"
-                    : isSelected()
+                    : isLocked()
                       ? "strobe"
                       : ""
                 }
@@ -226,7 +226,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 class={
                   padState() === "locked_nonviable"
                     ? "flash-warning"
-                    : isSelected()
+                    : isLocked()
                       ? "strobe"
                       : ""
                 }
@@ -249,7 +249,7 @@ const Terrain: Component<TerrainProps> = (props) => {
               {pad.occupied && (
                 <g
                   class="parked-rocket"
-                  transform={`translate(${padCenter()}, ${pad.y - 3})`}
+                  transform={`translate(${padCenter()}, ${pad.y - 11})`}
                 >
                   {/* Rocket body - simple vector style */}
                   <path
@@ -268,14 +268,14 @@ const Terrain: Component<TerrainProps> = (props) => {
                   />
                   {/* Left fin */}
                   <path
-                    d="M -8 0 L -14 8 L -8 -5 Z"
+                    d="M -8 0 L -14 8 L -8 -8 Z"
                     fill="none"
                     stroke="#ff8866"
                     stroke-width="1"
                   />
                   {/* Right fin */}
                   <path
-                    d="M 8 0 L 14 8 L 8 -5 Z"
+                    d="M 8 0 L 14 8 L 8 -8 Z"
                     fill="none"
                     stroke="#ff8866"
                     stroke-width="1"
@@ -299,7 +299,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 </g>
               )}
 
-              {/* Vertical broadcast lines - always visible from orbit */}
+              {/* Vertical broadcast lines - only visible when locked */}
               <line
                 x1={pad.x1}
                 y1={pad.y - 12}
@@ -308,7 +308,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 stroke={padColor()}
                 stroke-width={isLocked() ? "2" : "1"}
                 stroke-dasharray={isLocked() ? "8 8" : "6 12"}
-                opacity={isLocked() ? "0.7" : isSelected() ? "0.5" : "0.2"}
+                opacity={isLocked() ? "0.7" : "0.2"}
                 class={padState() === "locked_nonviable" ? "flash-warning" : ""}
               />
               <line
@@ -319,22 +319,20 @@ const Terrain: Component<TerrainProps> = (props) => {
                 stroke={padColor()}
                 stroke-width={isLocked() ? "2" : "1"}
                 stroke-dasharray={isLocked() ? "8 8" : "6 12"}
-                opacity={isLocked() ? "0.7" : isSelected() ? "0.5" : "0.2"}
+                opacity={isLocked() ? "0.7" : "0.2"}
                 class={padState() === "locked_nonviable" ? "flash-warning" : ""}
               />
-              {/* Center guide line - brighter for locked/selected pad */}
+              {/* Center guide line - only bright when locked */}
               <line
                 x1={padCenter()}
                 y1={pad.y - 22}
                 x2={padCenter()}
                 y2={0}
                 stroke={padColor()}
-                stroke-width={isLocked() ? "3" : isSelected() ? "2" : "1"}
-                stroke-dasharray={
-                  isLocked() ? "6 4" : isSelected() ? "4 6" : "2 10"
-                }
-                opacity={isLocked() ? "0.8" : isSelected() ? "0.6" : "0.15"}
-                filter={isLocked() || isSelected() ? "url(#glow)" : "none"}
+                stroke-width={isLocked() ? "3" : "1"}
+                stroke-dasharray={isLocked() ? "6 4" : "2 10"}
+                opacity={isLocked() ? "0.8" : "0.15"}
+                filter={isLocked() ? "url(#glow)" : "none"}
                 class={padState() === "locked_nonviable" ? "flash-warning" : ""}
               />
             </g>
