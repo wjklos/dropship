@@ -84,6 +84,7 @@ export interface CollisionResult {
   collision: boolean;
   outcome: LandingOutcome | null;
   landedPadIndex: number | null;
+  crashedPadIndex: number | null; // Set when crashing into an occupied pad
   terrainY: number;
   failureReason: FailureReason;
 }

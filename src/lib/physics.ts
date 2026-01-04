@@ -172,6 +172,7 @@ export function checkTerrainCollision(
       collision: false,
       outcome: null,
       landedPadIndex: null,
+      crashedPadIndex: null,
       terrainY: centerTerrainY,
       failureReason: null,
     };
@@ -207,6 +208,10 @@ export function checkTerrainCollision(
   let outcome: LandingOutcome;
   let failureReason: FailureReason = null;
   let landedPadIndex: number | null = null;
+  // Track crashed pad for rocket explosion - set whenever we hit an occupied pad
+  let crashedPadIndex: number | null = landingOnOccupiedPad
+    ? leftPadIndex
+    : null;
 
   if (!speedOk) {
     outcome = "crashed";
@@ -217,7 +222,7 @@ export function checkTerrainCollision(
   } else if (landingOnOccupiedPad) {
     // Landing on occupied pad - crash into the rocket!
     outcome = "crashed";
-    failureReason = "OFF_PAD"; // Could add "OCCUPIED" reason later
+    failureReason = "OFF_PAD";
   } else if (bothLegsOnSamePad && angleSuccess) {
     // Perfect landing - both legs on pad, good speed, good angle (within ±5°)
     outcome = "success";
@@ -252,6 +257,7 @@ export function checkTerrainCollision(
     collision: true,
     outcome,
     landedPadIndex,
+    crashedPadIndex,
     terrainY: landingSurfaceY,
     failureReason,
   };

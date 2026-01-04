@@ -27,6 +27,7 @@ interface TerrainProps {
   landingCone: number[]; // Pad indices in the reachable landing cone
   width: number;
   height: number;
+  destroyedPadIndex: number | null; // Pad with destroyed rocket (from crash)
 }
 
 const Terrain: Component<TerrainProps> = (props) => {
@@ -245,8 +246,8 @@ const Terrain: Component<TerrainProps> = (props) => {
                 {pad.occupied ? "OCCUPIED" : `${pad.multiplier}x`}
               </text>
 
-              {/* Rocket on occupied pads - sitting on the pad surface */}
-              {pad.occupied && (
+              {/* Rocket on occupied pads - sitting on the pad surface (hide if destroyed) */}
+              {pad.occupied && props.destroyedPadIndex !== index() && (
                 <g
                   class="parked-rocket"
                   transform={`translate(${padCenter()}, ${pad.y - 11})`}
@@ -299,42 +300,52 @@ const Terrain: Component<TerrainProps> = (props) => {
                 </g>
               )}
 
-              {/* Vertical broadcast lines - only visible when locked */}
-              <line
-                x1={pad.x1}
-                y1={pad.y - 12}
-                x2={pad.x1}
-                y2={0}
-                stroke={padColor()}
-                stroke-width={isLocked() ? "2" : "1"}
-                stroke-dasharray={isLocked() ? "8 8" : "6 12"}
-                opacity={isLocked() ? "0.7" : "0.2"}
-                class={padState() === "locked_nonviable" ? "flash-warning" : ""}
-              />
-              <line
-                x1={pad.x2}
-                y1={pad.y - 12}
-                x2={pad.x2}
-                y2={0}
-                stroke={padColor()}
-                stroke-width={isLocked() ? "2" : "1"}
-                stroke-dasharray={isLocked() ? "8 8" : "6 12"}
-                opacity={isLocked() ? "0.7" : "0.2"}
-                class={padState() === "locked_nonviable" ? "flash-warning" : ""}
-              />
-              {/* Center guide line - only bright when locked */}
-              <line
-                x1={padCenter()}
-                y1={pad.y - 22}
-                x2={padCenter()}
-                y2={0}
-                stroke={padColor()}
-                stroke-width={isLocked() ? "3" : "1"}
-                stroke-dasharray={isLocked() ? "6 4" : "2 10"}
-                opacity={isLocked() ? "0.8" : "0.15"}
-                filter={isLocked() ? "url(#glow)" : "none"}
-                class={padState() === "locked_nonviable" ? "flash-warning" : ""}
-              />
+              {/* Vertical broadcast lines - ONLY visible when locked */}
+              {isLocked() && (
+                <>
+                  <line
+                    x1={pad.x1}
+                    y1={pad.y - 12}
+                    x2={pad.x1}
+                    y2={0}
+                    stroke={padColor()}
+                    stroke-width="2"
+                    stroke-dasharray="8 8"
+                    opacity="0.7"
+                    class={
+                      padState() === "locked_nonviable" ? "flash-warning" : ""
+                    }
+                  />
+                  <line
+                    x1={pad.x2}
+                    y1={pad.y - 12}
+                    x2={pad.x2}
+                    y2={0}
+                    stroke={padColor()}
+                    stroke-width="2"
+                    stroke-dasharray="8 8"
+                    opacity="0.7"
+                    class={
+                      padState() === "locked_nonviable" ? "flash-warning" : ""
+                    }
+                  />
+                  {/* Center guide line */}
+                  <line
+                    x1={padCenter()}
+                    y1={pad.y - 22}
+                    x2={padCenter()}
+                    y2={0}
+                    stroke={padColor()}
+                    stroke-width="3"
+                    stroke-dasharray="6 4"
+                    opacity="0.8"
+                    filter="url(#glow)"
+                    class={
+                      padState() === "locked_nonviable" ? "flash-warning" : ""
+                    }
+                  />
+                </>
+              )}
             </g>
           );
         }}

@@ -1,4 +1,4 @@
-import { Component, createMemo, Show } from "solid-js";
+import { Component, createMemo, createSignal, Show, For } from "solid-js";
 import type { LanderState, ZoomLevel } from "../lib/types";
 
 interface LanderProps {
@@ -6,30 +6,51 @@ interface LanderProps {
   zoomLevel: ZoomLevel;
 }
 
+// Generate random flame line segments for vector-style exhaust
+function generateFlameLines(
+  thrust: number,
+): Array<{ x1: number; y1: number; x2: number; y2: number; opacity: number }> {
+  if (thrust <= 0) return [];
+
+  const lines: Array<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    opacity: number;
+  }> = [];
+  const numLines = 3 + Math.floor(thrust * 5); // 3-8 lines based on thrust
+  const baseLength = 12 + thrust * 25;
+
+  for (let i = 0; i < numLines; i++) {
+    // Random spread from engine nozzle
+    const spreadX = (Math.random() - 0.5) * 8 * thrust;
+    const startY = 10 + Math.random() * 3;
+    const length = baseLength * (0.5 + Math.random() * 0.5);
+    const endX = spreadX * (1 + Math.random() * 0.5);
+
+    lines.push({
+      x1: spreadX * 0.3,
+      y1: startY,
+      x2: endX,
+      y2: startY + length,
+      opacity: 0.4 + Math.random() * 0.6,
+    });
+  }
+
+  return lines;
+}
+
 const Lander: Component<LanderProps> = (props) => {
   // Scale lander based on zoom level
-  // When zoomed out (orbital), lander appears smaller
-  // When zoomed in (landing), lander appears normal size
   const landerScale = createMemo(() => {
-    // Base scale is 1 at viewHeight 250 (most zoomed in)
-    // Scale down proportionally as viewHeight increases
     const baseViewHeight = 250;
     const scale = baseViewHeight / props.zoomLevel.viewHeight;
-    // Clamp between 0.35 (small but visible in orbit) and 1.0 (full size at landing)
     return Math.max(0.35, Math.min(1.0, scale));
   });
 
-  // Thrust flame animation
-  const flameLength = createMemo(() => {
-    const base = 15;
-    const variable = 20 * props.lander.thrust;
-    const flicker = Math.random() * 5 * props.lander.thrust;
-    return base + variable + flicker;
-  });
-
-  const flameWidth = createMemo(() => {
-    return 6 + 8 * props.lander.thrust;
-  });
+  // Vector-style flame lines - regenerate each frame for flicker effect
+  const flameLines = createMemo(() => generateFlameLines(props.lander.thrust));
 
   const transform = createMemo(() => {
     const { x, y } = props.lander.position;
@@ -40,43 +61,32 @@ const Lander: Component<LanderProps> = (props) => {
 
   return (
     <g transform={transform()} class="lander">
-      {/* Thrust flame */}
+      {/* Vector-style thrust flames - individual line segments */}
       <Show when={props.lander.thrust > 0}>
         <g class="thrust-flame">
-          {/* Outer flame glow */}
-          <polygon
-            points={`
-              -${flameWidth() * 0.8},0
-              0,${flameLength() * 1.2}
-              ${flameWidth() * 0.8},0
-            `}
-            fill="none"
-            stroke="rgba(255, 150, 50, 0.3)"
-            stroke-width="8"
-            filter="url(#glow)"
-          />
-          {/* Middle flame */}
-          <polygon
-            points={`
-              -${flameWidth() * 0.6},0
-              0,${flameLength()}
-              ${flameWidth() * 0.6},0
-            `}
-            fill="none"
-            stroke="rgba(255, 200, 100, 0.6)"
-            stroke-width="4"
-            filter="url(#glow)"
-          />
-          {/* Inner flame */}
-          <polygon
-            points={`
-              -${flameWidth() * 0.3},2
-              0,${flameLength() * 0.7}
-              ${flameWidth() * 0.3},2
-            `}
-            fill="none"
+          <For each={flameLines()}>
+            {(line) => (
+              <line
+                x1={line.x1}
+                y1={line.y1}
+                x2={line.x2}
+                y2={line.y2}
+                stroke={`rgba(255, ${180 + Math.random() * 75}, ${50 + Math.random() * 100}, ${line.opacity})`}
+                stroke-width="1.5"
+                stroke-linecap="round"
+                filter="url(#glow)"
+              />
+            )}
+          </For>
+          {/* Core bright center line */}
+          <line
+            x1="0"
+            y1="10"
+            x2="0"
+            y2={10 + 15 + props.lander.thrust * 20 + Math.random() * 8}
             stroke="rgba(255, 255, 200, 0.9)"
             stroke-width="2"
+            stroke-linecap="round"
             filter="url(#glow)"
           />
         </g>

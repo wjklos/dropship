@@ -1,4 +1,11 @@
-import { Component, onMount, onCleanup, createEffect, For } from "solid-js";
+import {
+  Component,
+  onMount,
+  onCleanup,
+  createEffect,
+  createSignal,
+  For,
+} from "solid-js";
 import { createGameStore } from "../stores/game";
 import { updatePhysics, checkTerrainCollision } from "../lib/physics";
 import {
@@ -14,6 +21,7 @@ import Terrain from "./Terrain";
 import HUD from "./HUD";
 import CRTOverlay from "./CRTOverlay";
 import TrajectoryOverlay from "./TrajectoryOverlay";
+import CrashDebris from "./CrashDebris";
 
 const PHYSICS_TIMESTEP = 1 / 60; // 60 Hz physics
 
@@ -22,6 +30,18 @@ const Game: Component = () => {
   let animationFrameId: number;
   let lastTime = 0;
   let accumulator = 0;
+
+  // Track which pad was crashed into (for rocket explosion)
+  const [crashedPadIndex, setCrashedPadIndex] = createSignal<number | null>(
+    null,
+  );
+
+  // Reset crashedPadIndex when game resets (lander becomes alive again)
+  createEffect(() => {
+    if (store.lander().alive) {
+      setCrashedPadIndex(null);
+    }
+  });
 
   // Apply world theme colors to CSS
   createEffect(() => {
@@ -246,6 +266,8 @@ const Game: Component = () => {
           failureReason: collision.failureReason,
         });
         store.setGamePhase("crashed");
+        // Track if we crashed into an occupied pad (for rocket explosion)
+        setCrashedPadIndex(collision.crashedPadIndex);
         // Finalize flight log
         store.finalizeFlightLog("crashed", collision.failureReason, null);
 
@@ -370,6 +392,7 @@ const Game: Component = () => {
           landingCone={store.landingCone()}
           width={store.config().width}
           height={store.config().height}
+          destroyedPadIndex={crashedPadIndex()}
         />
 
         {/* Trajectory Prediction Overlay */}
@@ -384,8 +407,24 @@ const Game: Component = () => {
           worldWidth={store.config().width}
         />
 
-        {/* Lander */}
-        <Lander lander={store.lander()} zoomLevel={store.currentZoom()} />
+        {/* Lander - hide when crashed (debris takes over) */}
+        {store.lander().outcome !== "crashed" && (
+          <Lander lander={store.lander()} zoomLevel={store.currentZoom()} />
+        )}
+
+        {/* Crash debris animation */}
+        <CrashDebris
+          crashPosition={store.lander().position}
+          crashVelocity={store.lander().velocity}
+          crashRotation={store.lander().rotation}
+          gravity={store.config().gravity}
+          active={store.lander().outcome === "crashed"}
+          crashedPad={
+            crashedPadIndex() !== null
+              ? store.landingPads()[crashedPadIndex()!]
+              : undefined
+          }
+        />
       </svg>
 
       {/* HUD Overlay */}
