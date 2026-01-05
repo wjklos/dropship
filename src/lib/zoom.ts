@@ -46,8 +46,15 @@ export function calculateViewBox(
   zoomLevel: ZoomLevel,
   aspectRatio: number, // window width / height
 ): { x: number; y: number; width: number; height: number } {
-  const viewHeight = zoomLevel.viewHeight;
-  const viewWidth = viewHeight * aspectRatio;
+  let viewHeight = zoomLevel.viewHeight;
+  let viewWidth = viewHeight * aspectRatio;
+
+  // If view would be wider than the world, use full world width
+  // and adjust height to maintain aspect ratio (prevents black bars)
+  if (viewWidth > worldWidth) {
+    viewWidth = worldWidth;
+    viewHeight = worldWidth / aspectRatio;
+  }
 
   // Center on lander
   let viewX = landerX - viewWidth / 2;
@@ -57,15 +64,11 @@ export function calculateViewBox(
   viewX = Math.max(0, Math.min(worldWidth - viewWidth, viewX));
   viewY = Math.max(0, Math.min(worldHeight - viewHeight, viewY));
 
-  // Ensure we don't have negative dimensions
-  const finalWidth = Math.min(viewWidth, worldWidth);
-  const finalHeight = Math.min(viewHeight, worldHeight);
-
   return {
-    x: Math.max(0, viewX),
-    y: Math.max(0, viewY),
-    width: finalWidth,
-    height: finalHeight,
+    x: viewX,
+    y: viewY,
+    width: viewWidth,
+    height: viewHeight,
   };
 }
 

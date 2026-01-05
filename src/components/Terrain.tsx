@@ -6,6 +6,7 @@ import { terrainToPath } from "../lib/terrain";
  * Pad visual state for color coding
  * - locked: Blue - committed target pad
  * - locked_nonviable: Flashing blue/red - locked but can't reach it
+ * - highlighted: Yellow/gold - currently highlighted for manual selection
  * - in_cone: Cyan - in the landing cone (reachable)
  * - viable: Green - achievable alternative (not in cone)
  * - nonviable: Dim - can't reach this pad
@@ -13,6 +14,7 @@ import { terrainToPath } from "../lib/terrain";
 export type PadVisualState =
   | "locked"
   | "locked_nonviable"
+  | "highlighted"
   | "in_cone"
   | "viable"
   | "nonviable";
@@ -24,6 +26,7 @@ interface TerrainProps {
   selectedPadIndex: number;
   lockedPadIndex: number | null; // Which pad is locked (committed)
   lockedPadViable: boolean; // Is the locked pad still reachable?
+  highlightedPadIndex: number | null; // Which pad is highlighted for manual selection
   landingCone: number[]; // Pad indices in the reachable landing cone
   width: number;
   height: number;
@@ -67,12 +70,17 @@ const Terrain: Component<TerrainProps> = (props) => {
           const viability = () => props.padViabilities[index()];
           const isSelected = () => index() === props.selectedPadIndex;
           const isLocked = () => props.lockedPadIndex === index();
+          const isHighlighted = () => props.highlightedPadIndex === index();
           const isInCone = () => props.landingCone.includes(index());
 
           // Determine pad visual state
           const padState = (): PadVisualState => {
             if (isLocked()) {
               return props.lockedPadViable ? "locked" : "locked_nonviable";
+            }
+            // Highlighted pad (manual selection cycling) - only if not locked
+            if (isHighlighted() && isInCone()) {
+              return "highlighted";
             }
             // Show cone membership before general viability
             if (isInCone()) {
@@ -85,13 +93,15 @@ const Terrain: Component<TerrainProps> = (props) => {
           };
 
           // Color based on state
-          // Blue = locked, Cyan = in cone, Green = viable alternatives, Dim = nonviable
+          // Blue = locked, Yellow = highlighted, Cyan = in cone, Green = viable alternatives, Dim = nonviable
           const padColor = () => {
             switch (padState()) {
               case "locked":
                 return "#4488ff"; // Blue - committed target
               case "locked_nonviable":
                 return "#4488ff"; // Base blue (CSS animation handles flash)
+              case "highlighted":
+                return "#ffdd44"; // Yellow/gold - currently highlighted for selection
               case "in_cone":
                 return "#44dddd"; // Cyan - in landing cone (reachable)
               case "viable":

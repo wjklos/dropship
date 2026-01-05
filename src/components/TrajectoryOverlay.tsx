@@ -18,11 +18,18 @@ interface TrajectoryOverlayProps {
   prediction: TrajectoryPrediction | null;
   targetPad: LandingPad | null;
   landingPads: LandingPad[];
-  optimalBurnPoint: number | null;
-  windowOpensIn: number;
+  lockedDeorbitX: number | null;
+  deorbitTimingDelta: number | null;
   showTrajectory: boolean;
   phase: "orbit" | "descent" | "terminal" | "landed" | "crashed" | "abort";
   worldWidth: number;
+  currentGs: number;
+  maxGs: number;
+  landerX: number;
+  landerY: number;
+  landerVelocityX: number;
+  zoomScale: number;
+  gameTime: number;
 }
 
 const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
@@ -46,6 +53,9 @@ const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
       (pad) => pad.occupied && impactX >= pad.x1 && impactX <= pad.x2,
     );
   });
+
+  // Hide reticle and X marker at high zoom (scale >= 3)
+  const isCloseView = createMemo(() => props.zoomScale >= 3);
 
   // Color based on whether we'll hit the pad (red if occupied)
   const trajectoryColor = createMemo(() => {
@@ -86,12 +96,13 @@ const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
         </For>
       </Show>
 
-      {/* Impact point marker */}
+      {/* Impact point marker - hidden at close zoom */}
       <Show
         when={
           impactMarker() &&
           props.phase !== "landed" &&
-          props.phase !== "crashed"
+          props.phase !== "crashed" &&
+          !isCloseView()
         }
       >
         <g transform={`translate(${impactMarker()!.x}, ${impactMarker()!.y})`}>
@@ -128,45 +139,204 @@ const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
         </g>
       </Show>
 
-      {/* Optimal burn point indicator (during orbit phase) */}
-      <Show when={props.phase === "orbit" && props.optimalBurnPoint !== null}>
-        <g>
-          {/* Vertical line at optimal burn point */}
-          <line
-            x1={props.optimalBurnPoint!}
-            y1={0}
-            x2={props.optimalBurnPoint!}
-            y2={200}
-            stroke="rgba(0, 200, 255, 0.6)"
-            stroke-width="2"
-            stroke-dasharray="6 6"
-            filter="url(#glow)"
-          />
-          {/* Diamond marker at top */}
-          <polygon
-            points={`${props.optimalBurnPoint!},20 ${props.optimalBurnPoint! - 8},35 ${props.optimalBurnPoint!},50 ${props.optimalBurnPoint! + 8},35`}
-            fill="none"
-            stroke="rgba(0, 200, 255, 0.8)"
-            stroke-width="2"
-            filter="url(#glow)"
-          />
-          {/* "BURN" label */}
-          <text
-            x={props.optimalBurnPoint!}
-            y={70}
-            text-anchor="middle"
-            fill="rgba(0, 200, 255, 0.9)"
-            font-size="10"
-            font-family="var(--font-mono)"
-            filter="url(#glow)"
-          >
-            DEORBIT
-          </text>
-        </g>
+      {/* Deorbit burn window - horizontal bar showing green/yellow/red zones */}
+      <Show
+        when={
+          props.lockedDeorbitX !== null &&
+          props.phase !== "landed" &&
+          props.phase !== "crashed"
+        }
+      >
+        {(() => {
+          const optimalX = props.lockedDeorbitX!;
+          const velocity = props.landerVelocityX;
+          const worldWidth = props.worldWidth;
+
+          // Calculate horizontal distance from lander to deorbit point
+          // Account for world wraparound
+          let distanceToDeorbit = optimalX - props.landerX;
+          if (velocity > 0) {
+            // Moving right - if deorbit is "behind" us, it's actually ahead (wrapped)
+            if (distanceToDeorbit < 0) distanceToDeorbit += worldWidth;
+          } else if (velocity < 0) {
+            // Moving left
+            if (distanceToDeorbit > 0) distanceToDeorbit -= worldWidth;
+          }
+
+          // Time to reach deorbit point
+          const timeToDeorbit =
+            velocity !== 0 ? Math.abs(distanceToDeorbit / velocity) : 999;
+
+          // Use a FIXED reference velocity for zone widths (orbital velocity at lock time)
+          // This prevents the bar from collapsing when thrust changes velocity
+          // Use 100 px/s as a reasonable orbital speed reference
+          const referenceVelocity = 100;
+
+          // Define window zones (in seconds converted to pixels based on reference velocity)
+          // Green: optimal point (small zone around optimalX)
+          // Yellow: acceptable zone (extends from green)
+          // Red: last chance / overshoot zone (extends from yellow on both sides)
+          const greenHalfWidth = referenceVelocity * 0.5; // ±0.5 second buffer = 1s total
+          const yellowWidth = referenceVelocity * 1.5; // 1.5 more seconds each side
+          const redWidth = referenceVelocity * 1; // 1 more second each side
+
+          // Flash speed based on urgency
+          const flashSpeed = timeToDeorbit < 1 ? 10 : timeToDeorbit < 3 ? 6 : 3;
+          const flashOpacity =
+            timeToDeorbit < 5
+              ? 0.7 + 0.3 * Math.abs(Math.sin(props.gameTime * flashSpeed))
+              : 0.8;
+
+          // Determine current zone color for text based on time and whether we've passed it
+          let textColor = "rgba(0, 255, 100, 0.9)"; // Green
+          const timePastOptimal = -timeToDeorbit; // Negative means we haven't reached it yet
+
+          if (timeToDeorbit < 0.5 && timeToDeorbit >= 0) {
+            textColor = "rgba(0, 255, 100, 1)"; // Green - we're in the sweet spot
+          } else if (timeToDeorbit < 2) {
+            textColor = "rgba(255, 200, 0, 1)"; // Yellow - close
+          } else if (timeToDeorbit < 3.5) {
+            textColor = "rgba(255, 200, 0, 0.9)"; // Yellow - approaching
+          } else {
+            textColor = "rgba(0, 255, 100, 0.9)"; // Green - plenty of time
+          }
+
+          // Position the bar at orbital altitude (around y=100)
+          const barY = 95;
+          const barHeight = 14;
+
+          return (
+            <g>
+              {/* Horizontal burn window bar - SYMMETRICAL zones on both sides */}
+              <g opacity={flashOpacity}>
+                {/* Left red zone (undershoot - too early) */}
+                <rect
+                  x={optimalX - greenHalfWidth - yellowWidth - redWidth}
+                  y={barY}
+                  width={redWidth}
+                  height={barHeight}
+                  fill="url(#deorbit-hatch-red)"
+                  stroke="rgba(255, 50, 50, 0.8)"
+                  stroke-width="1"
+                />
+                {/* Left yellow zone */}
+                <rect
+                  x={optimalX - greenHalfWidth - yellowWidth}
+                  y={barY}
+                  width={yellowWidth}
+                  height={barHeight}
+                  fill="url(#deorbit-hatch-yellow)"
+                  stroke="rgba(255, 200, 0, 0.8)"
+                  stroke-width="1"
+                />
+                {/* Green zone (optimal - centered) */}
+                <rect
+                  x={optimalX - greenHalfWidth}
+                  y={barY}
+                  width={greenHalfWidth * 2}
+                  height={barHeight}
+                  fill="url(#deorbit-hatch-green)"
+                  stroke="rgba(0, 255, 100, 0.8)"
+                  stroke-width="1"
+                />
+                {/* Right yellow zone */}
+                <rect
+                  x={optimalX + greenHalfWidth}
+                  y={barY}
+                  width={yellowWidth}
+                  height={barHeight}
+                  fill="url(#deorbit-hatch-yellow)"
+                  stroke="rgba(255, 200, 0, 0.8)"
+                  stroke-width="1"
+                />
+                {/* Right red zone (overshoot - too late) */}
+                <rect
+                  x={optimalX + greenHalfWidth + yellowWidth}
+                  y={barY}
+                  width={redWidth}
+                  height={barHeight}
+                  fill="url(#deorbit-hatch-red)"
+                  stroke="rgba(255, 50, 50, 0.8)"
+                  stroke-width="1"
+                />
+              </g>
+
+              {/* Countdown timer - below bar (only shown before burn starts) */}
+              {props.deorbitTimingDelta === null && (
+                <text
+                  x={optimalX}
+                  y={barY + barHeight + 18}
+                  text-anchor="middle"
+                  fill={textColor}
+                  font-size="11"
+                  font-family="var(--font-mono)"
+                  font-weight="bold"
+                  filter="url(#glow)"
+                  opacity={flashOpacity}
+                >
+                  {timeToDeorbit > 99
+                    ? "---"
+                    : timeToDeorbit < 0.5
+                      ? "NOW!"
+                      : `T-${timeToDeorbit.toFixed(1)}s`}
+                </text>
+              )}
+
+              {/* Timing delta - shown after burn starts */}
+              {props.deorbitTimingDelta !== null && (
+                <text
+                  x={optimalX}
+                  y={barY + barHeight + 18}
+                  text-anchor="middle"
+                  fill={
+                    Math.abs(props.deorbitTimingDelta) < 0.5
+                      ? "rgba(0, 255, 100, 1)"
+                      : Math.abs(props.deorbitTimingDelta) < 2
+                        ? "rgba(255, 200, 0, 1)"
+                        : "rgba(255, 50, 50, 1)"
+                  }
+                  font-size="11"
+                  font-family="var(--font-mono)"
+                  font-weight="bold"
+                  filter="url(#glow)"
+                  opacity={0.9}
+                >
+                  {props.deorbitTimingDelta >= 0 ? "+" : ""}
+                  {props.deorbitTimingDelta.toFixed(1)}s
+                </text>
+              )}
+
+              {/* Optimal point marker - solid green line through the bar */}
+              <line
+                x1={optimalX}
+                y1={barY - 4}
+                x2={optimalX}
+                y2={barY + barHeight + 4}
+                stroke="rgba(0, 255, 100, 1)"
+                stroke-width="2"
+                filter="url(#glow)"
+                opacity={flashOpacity}
+              />
+
+              {/* Vertical guide line extending down from bar to surface */}
+              <line
+                x1={optimalX}
+                y1={barY + barHeight}
+                x2={optimalX}
+                y2={500}
+                stroke="rgba(0, 255, 100, 0.6)"
+                stroke-width="1.5"
+                stroke-dasharray="8 6"
+                opacity={0.4 * flashOpacity}
+                filter="url(#glow)"
+              />
+            </g>
+          );
+        })()}
       </Show>
 
-      {/* Target pad highlight */}
-      <Show when={props.targetPad && padCenter()}>
+      {/* Target pad highlight - hidden at close zoom */}
+      <Show when={props.targetPad && padCenter() && !isCloseView()}>
         <g>
           {/* Target reticle at pad */}
           <circle
@@ -197,19 +367,12 @@ const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
         </g>
       </Show>
 
-      {/* Insertion window countdown (shown in orbit) */}
-      <Show when={props.phase === "orbit" && props.windowOpensIn > 0.5}>
-        <g>
-          {/* This will be positioned in screen space by HUD, but we can add a marker here */}
-        </g>
-      </Show>
-
-      {/* Impact prediction info */}
+      {/* Impact prediction info - positioned below the X marker */}
       <Show
         when={props.prediction && impactMarker() && props.phase === "descent"}
       >
         <g
-          transform={`translate(${impactMarker()!.x}, ${impactMarker()!.y - 25})`}
+          transform={`translate(${impactMarker()!.x}, ${impactMarker()!.y + 25})`}
         >
           <text
             x="0"
@@ -232,6 +395,42 @@ const TrajectoryOverlay: Component<TrajectoryOverlayProps> = (props) => {
             filter="url(#glow)"
           >
             {props.prediction!.impactVelocity.toFixed(0)} m/s
+          </text>
+        </g>
+      </Show>
+
+      {/* G-force display - shown during active flight (not landed/crashed) */}
+      <Show when={props.phase !== "landed" && props.phase !== "crashed"}>
+        <g transform={`translate(${props.landerX}, ${props.landerY - 45})`}>
+          {/* Current G-force */}
+          <text
+            x="0"
+            y="0"
+            text-anchor="middle"
+            fill={
+              props.currentGs > 3
+                ? "rgba(255, 100, 100, 0.9)"
+                : props.currentGs > 2
+                  ? "rgba(255, 200, 0, 0.9)"
+                  : "rgba(0, 255, 136, 0.8)"
+            }
+            font-size="10"
+            font-family="var(--font-mono)"
+            filter="url(#glow)"
+          >
+            {props.currentGs.toFixed(1)}G
+          </text>
+          {/* Max G-force */}
+          <text
+            x="0"
+            y="12"
+            text-anchor="middle"
+            fill="rgba(180, 180, 180, 0.7)"
+            font-size="8"
+            font-family="var(--font-mono)"
+            filter="url(#glow)"
+          >
+            MAX {props.maxGs.toFixed(1)}G
           </text>
         </g>
       </Show>

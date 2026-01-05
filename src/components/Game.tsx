@@ -22,6 +22,10 @@ import HUD from "./HUD";
 import CRTOverlay from "./CRTOverlay";
 import TrajectoryOverlay from "./TrajectoryOverlay";
 import CrashDebris from "./CrashDebris";
+import PadTelemetry from "./PadTelemetry";
+import AtmosphericEffects from "./AtmosphericEffects";
+import WindBands from "./WindBands";
+import WindParticles from "./WindParticles";
 
 const PHYSICS_TIMESTEP = 1 / 60; // 60 Hz physics
 
@@ -61,8 +65,9 @@ const Game: Component = () => {
         "--world-pad-unviable",
         world.colors.padUnviable,
       );
-      container.style.setProperty("--vector-primary", world.colors.primary);
-      container.style.setProperty("--vector-secondary", world.colors.secondary);
+      // Note: --vector-primary and --vector-secondary stay as fixed green
+      // for consistent UI elements (dialogs, HUD). World-specific theming
+      // uses --world-primary and --world-secondary instead.
     }
   });
 
@@ -178,13 +183,16 @@ const Game: Component = () => {
       rotationInput = (input.rotateLeft ? -1 : 0) + (input.rotateRight ? 1 : 0);
     }
 
-    // Update physics
+    // Update physics (with atmosphere if world has one)
     const newLander = updatePhysics(
       lander,
       config,
       thrustInput,
       rotationInput,
       dt,
+      world.atmosphere,
+      store.gameTime(),
+      store.altitude(),
     );
 
     // Transition from orbit to descent on first burn
@@ -225,12 +233,16 @@ const Game: Component = () => {
           },
         });
         store.setGamePhase("landed");
+        store.setLandedPadIndex(collision.landedPadIndex);
         // Finalize flight log
         store.finalizeFlightLog("success", null, collision.landedPadIndex);
 
         if (isDemo) {
           store.recordDemoResult(true, null);
           setTimeout(() => store.reset(true), 2000);
+        } else if (store.autopilotMode() === "off") {
+          // Manual mode - record human result
+          store.recordHumanResult(true, null);
         }
       } else if (collision.outcome === "damaged") {
         // Damaged landing - survived but not on pad
@@ -255,6 +267,9 @@ const Game: Component = () => {
         if (isDemo) {
           store.recordDemoResult(false, collision.failureReason);
           setTimeout(() => store.reset(true), 2000);
+        } else if (store.autopilotMode() === "off") {
+          // Manual mode - record human result
+          store.recordHumanResult(false, collision.failureReason);
         }
       } else {
         // Crash!
@@ -274,6 +289,9 @@ const Game: Component = () => {
         if (isDemo) {
           store.recordDemoResult(false, collision.failureReason);
           setTimeout(() => store.reset(true), 2000);
+        } else if (store.autopilotMode() === "off") {
+          // Manual mode - record human result
+          store.recordHumanResult(false, collision.failureReason);
         }
       }
       store.setGameOver(true);
@@ -361,6 +379,66 @@ const Game: Component = () => {
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+
+          {/* Clip path for wind elements - everything above terrain */}
+          <clipPath id="above-terrain-clip">
+            <rect
+              x="0"
+              y="0"
+              width={store.config().width}
+              height={Math.max(...store.terrain().map((p) => p.y)) - 10}
+            />
+          </clipPath>
+
+          {/* Hatch patterns for deorbit timing bar */}
+          <pattern
+            id="deorbit-hatch-green"
+            patternUnits="userSpaceOnUse"
+            width="4"
+            height="4"
+            patternTransform="rotate(45)"
+          >
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="4"
+              stroke="rgba(0, 255, 100, 0.6)"
+              stroke-width="2"
+            />
+          </pattern>
+          <pattern
+            id="deorbit-hatch-yellow"
+            patternUnits="userSpaceOnUse"
+            width="4"
+            height="4"
+            patternTransform="rotate(45)"
+          >
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="4"
+              stroke="rgba(255, 200, 0, 0.6)"
+              stroke-width="2"
+            />
+          </pattern>
+          <pattern
+            id="deorbit-hatch-red"
+            patternUnits="userSpaceOnUse"
+            width="4"
+            height="4"
+            patternTransform="rotate(45)"
+          >
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="4"
+              stroke="rgba(255, 50, 50, 0.6)"
+              stroke-width="2"
+            />
+          </pattern>
         </defs>
 
         {/* Stars */}
@@ -377,6 +455,75 @@ const Game: Component = () => {
           </For>
         </g>
 
+        {/* Atmosphere gradient overlay (Mars has dusty atmosphere) */}
+        {store.world().colors.atmosphere && (
+          <>
+            <defs>
+              <linearGradient
+                id="atmosphere-gradient"
+                x1="0%"
+                y1="0%"
+                x2="0%"
+                y2="100%"
+              >
+                <stop
+                  offset="0%"
+                  stop-color={store.world().colors.atmosphere}
+                  stop-opacity="0"
+                />
+                <stop
+                  offset="40%"
+                  stop-color={store.world().colors.atmosphere}
+                  stop-opacity="0.15"
+                />
+                <stop
+                  offset="70%"
+                  stop-color={store.world().colors.atmosphere}
+                  stop-opacity="0.35"
+                />
+                <stop
+                  offset="100%"
+                  stop-color={store.world().colors.atmosphere}
+                  stop-opacity="0.6"
+                />
+              </linearGradient>
+            </defs>
+            <rect
+              x="0"
+              y="0"
+              width={store.config().width}
+              height={store.config().height}
+              fill="url(#atmosphere-gradient)"
+            />
+          </>
+        )}
+
+        {/* Wind particles - render BEFORE terrain so they appear behind, clipped to above terrain */}
+        {store.world().atmosphere && (
+          <g clip-path="url(#above-terrain-clip)">
+            <WindParticles
+              atmosphere={store.world().atmosphere}
+              worldWidth={store.config().width}
+              terrainMaxY={Math.max(...store.terrain().map((p) => p.y))}
+              gameTime={store.gameTime()}
+              primaryColor={store.world().colors.primary}
+              orbitalVelocity={store.world().orbitalVelocity}
+            />
+          </g>
+        )}
+
+        {/* Wind bands overlay for atmospheric worlds */}
+        {store.world().atmosphere && (
+          <WindBands
+            atmosphere={store.world().atmosphere}
+            worldHeight={store.config().height}
+            worldWidth={store.config().width}
+            terrainMaxY={Math.max(...store.terrain().map((p) => p.y))}
+            gameTime={store.gameTime()}
+            primaryColor={store.world().colors.primary}
+          />
+        )}
+
         {/* Terrain */}
         <Terrain
           terrain={store.terrain()}
@@ -389,6 +536,12 @@ const Game: Component = () => {
               : null
           }
           lockedPadViable={store.gncState().lockedPadViable}
+          highlightedPadIndex={
+            // Only show highlighted pad in manual mode when not locked
+            store.autopilotMode() === "off" && !store.gncState().targetPadLocked
+              ? (store.landingCone()[store.highlightedConeIndex()] ?? null)
+              : null
+          }
           landingCone={store.landingCone()}
           width={store.config().width}
           height={store.config().height}
@@ -400,16 +553,67 @@ const Game: Component = () => {
           prediction={store.trajectoryPrediction()}
           targetPad={store.targetPad()}
           landingPads={store.landingPads()}
-          optimalBurnPoint={store.optimalBurnPoint()}
-          windowOpensIn={store.insertionWindowTime()}
+          lockedDeorbitX={store.gncState().lockedDeorbitX}
+          deorbitTimingDelta={store.gncState().deorbitTimingDelta}
           showTrajectory={store.showTrajectory()}
           phase={store.gamePhase()}
           worldWidth={store.config().width}
+          currentGs={store.lander().currentGs}
+          maxGs={store.lander().maxGs}
+          landerX={store.lander().position.x}
+          landerY={store.lander().position.y}
+          landerVelocityX={store.lander().velocity.x}
+          zoomScale={store.currentZoom().scale}
+          gameTime={store.gameTime()}
+        />
+
+        {/* In-SVG telemetry below locked pad (visible when zoomed in) */}
+        <PadTelemetry
+          pad={
+            store.gncState().targetPadLocked
+              ? store.landingPads()[store.gncState().targetPadIndex]
+              : null
+          }
+          altitude={store.altitude()}
+          verticalSpeed={store.verticalSpeed()}
+          horizontalSpeed={store.horizontalSpeed()}
+          fuel={store.lander().fuel}
+          angleOk={store.landingStatus().angleOk}
+          speedOk={store.landingStatus().speedOk}
+          zoomLevel={store.currentZoom()}
+          visible={
+            store.lander().alive &&
+            !store.lander().landed &&
+            store.gamePhase() === "descent"
+          }
+        />
+
+        {/* Atmospheric effects (heat shield, dust) */}
+        <AtmosphericEffects
+          landerX={store.lander().position.x}
+          landerY={store.lander().position.y}
+          velocityX={store.lander().velocity.x}
+          velocityY={store.lander().velocity.y}
+          rotation={store.lander().rotation}
+          thrust={store.lander().thrust}
+          altitude={store.altitude()}
+          landed={store.lander().landed}
+          alive={store.lander().alive}
+          hasAtmosphere={!!store.world().colors.atmosphere}
+          atmosphereColor={store.world().colors.atmosphere}
+          dustColor={store.world().colors.dust}
+          heatingAltitude={600}
+          heatingVelocity={80}
         />
 
         {/* Lander - hide when crashed (debris takes over) */}
         {store.lander().outcome !== "crashed" && (
-          <Lander lander={store.lander()} zoomLevel={store.currentZoom()} />
+          <Lander
+            lander={store.lander()}
+            zoomLevel={store.currentZoom()}
+            worldId={store.worldId()}
+            altitude={store.altitude()}
+          />
         )}
 
         {/* Crash debris animation */}
@@ -424,6 +628,7 @@ const Game: Component = () => {
               ? store.landingPads()[crashedPadIndex()!]
               : undefined
           }
+          worldId={store.worldId()}
         />
       </svg>
 
@@ -443,6 +648,13 @@ const Game: Component = () => {
         demoAttempts={store.demoAttempts()}
         demoSuccesses={store.demoSuccesses()}
         demoDamaged={store.demoDamaged()}
+        demoScore={store.demoScore()}
+        demoStreak={store.demoStreak()}
+        humanAttempts={store.humanAttempts()}
+        humanSuccesses={store.humanSuccesses()}
+        humanDamaged={store.humanDamaged()}
+        humanScore={store.humanScore()}
+        humanStreak={store.humanStreak()}
         gamePhase={store.gamePhase()}
         worldName={store.world().name}
         worldGravity={store.world().realGravity}
@@ -454,6 +666,11 @@ const Game: Component = () => {
         currentWorldId={store.worldId()}
         approachMode={store.approachMode()}
         onSelectApproach={store.setApproachMode}
+        windEffect={store.currentWindEffect()}
+        hasAtmosphere={!!store.world().atmosphere}
+        onSelectAutopilot={store.setAutopilotMode}
+        regionName={store.regionName()}
+        landedPadDesignation={store.landedPadDesignation()}
       />
 
       {/* CRT Effect Overlay */}

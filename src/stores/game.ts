@@ -34,6 +34,7 @@ import {
   calculateViewBox,
   canAbortAtAltitude,
 } from "../lib/zoom";
+import { getWindEffectAt } from "../lib/atmosphere";
 import {
   FlightLogger,
   saveFlightRecord,
@@ -44,6 +45,8 @@ import {
 import {
   predictTrajectory,
   findInsertionWindow,
+  calculateTwoBurnSolution,
+  calculateOptimalBurnX,
   type TrajectoryPrediction,
 } from "../lib/trajectory";
 
@@ -97,6 +100,9 @@ function createInitialLander(
     hasBurned: false, // No thrust yet - in stable orbit
     outcome: null,
     failureReason: null,
+    // G-force tracking
+    currentGs: 0,
+    maxGs: 0,
   };
 }
 
@@ -117,6 +123,9 @@ export function createGameStore() {
   const initialTerrain = generateTerrain(
     initialConfig.width,
     initialConfig.height,
+    0.6,
+    7,
+    initialWorld.id,
   );
   const initialStars = generateStars(
     initialConfig.width,
@@ -134,6 +143,9 @@ export function createGameStore() {
   const [landingPads, setLandingPads] = createSignal<LandingPad[]>(
     initialTerrain.landingPads,
   );
+  const [regionName, setRegionName] = createSignal<string>(
+    initialTerrain.regionName,
+  );
   const [stars, setStars] = createSignal(initialStars);
 
   // Game phase tracking
@@ -144,6 +156,8 @@ export function createGameStore() {
   const [selectedPadIndex, setSelectedPadIndex] = createSignal<number>(0);
   const [landingCone, setLandingCone] = createSignal<number[]>([]); // Pad indices in the reachable cone
   const [targetLocked, setTargetLocked] = createSignal<boolean>(false); // Has target been selected for this flight?
+  const [highlightedConeIndex, setHighlightedConeIndex] =
+    createSignal<number>(0); // Index within the cone for manual cycling
 
   // Input state
   const [input, setInput] = createSignal<InputState>({
@@ -161,11 +175,14 @@ export function createGameStore() {
   const [gameTime, setGameTime] = createSignal(0);
   const [paused, setPaused] = createSignal(false);
   const [gameOver, setGameOver] = createSignal(false);
+  const [landedPadIndex, setLandedPadIndex] = createSignal<number | null>(null);
 
   // Demo mode stats
   const [demoAttempts, setDemoAttempts] = createSignal(0);
   const [demoSuccesses, setDemoSuccesses] = createSignal(0);
   const [demoDamaged, setDemoDamaged] = createSignal(0);
+  const [demoScore, setDemoScore] = createSignal(0);
+  const [demoStreak, setDemoStreak] = createSignal(0);
   const [failureStats, setFailureStats] = createSignal<FailureStats>({
     VELOCITY_HIGH: 0,
     ANGLE_BAD: 0,
@@ -173,6 +190,13 @@ export function createGameStore() {
     OUT_OF_FUEL: 0,
     DAMAGED: 0,
   });
+
+  // Human mode stats
+  const [humanAttempts, setHumanAttempts] = createSignal(0);
+  const [humanSuccesses, setHumanSuccesses] = createSignal(0);
+  const [humanDamaged, setHumanDamaged] = createSignal(0);
+  const [humanScore, setHumanScore] = createSignal(0);
+  const [humanStreak, setHumanStreak] = createSignal(0); // Current consecutive successes
 
   // Last failure reason for display
   const [lastFailureReason, setLastFailureReason] =
@@ -198,9 +222,14 @@ export function createGameStore() {
           )
         : { pad: pads[0], index: 0, viable: true };
 
+    // Only include approachMode for autopilot modes that use it
+    const mode = autopilotMode();
+    const approach = mode === "land" || mode === "demo" ? approachMode() : null;
+
     flightLogger = new FlightLogger(
       worldId(),
-      autopilotMode(),
+      mode,
+      approach,
       lander(),
       targetPad.pad,
       targetPad.index,
@@ -246,6 +275,9 @@ export function createGameStore() {
   const [optimalBurnPoint, setOptimalBurnPoint] = createSignal<number | null>(
     null,
   );
+  const [lockedDeorbitPoint, setLockedDeorbitPoint] = createSignal<
+    number | null
+  >(null);
   const [insertionWindowTime, setInsertionWindowTime] = createSignal<number>(0);
   const [showTrajectory, setShowTrajectory] = createSignal<boolean>(true);
 
@@ -356,8 +388,26 @@ export function createGameStore() {
     };
   });
 
+  // Current wind effect at lander position
+  const currentWindEffect = createMemo(() => {
+    const currentWorld = world();
+    const l = lander();
+    const alt = altitude();
+    const time = gameTime();
+
+    return getWindEffectAt(alt, l.velocity, currentWorld.atmosphere, time);
+  });
+
   // Check if world selection is locked (after first burn)
   const worldLocked = createMemo(() => lander().hasBurned);
+
+  // Get the designation of the pad that was landed on (for success message)
+  const landedPadDesignation = createMemo(() => {
+    const idx = landedPadIndex();
+    if (idx === null) return null;
+    const pads = landingPads();
+    return pads[idx]?.designation ?? null;
+  });
 
   // Check if abort is available
   const canAbort = createMemo(() => {
@@ -450,7 +500,6 @@ export function createGameStore() {
       );
       setTargetLocked(true);
       setSelectedPadIndex(finalSelection.selected.index);
-      console.log(`[PAD LOCK] Locked to pad ${finalSelection.selected.index}`);
     }
     // Don't update selectedPadIndex until we lock - prevents overwriting the random selection
     // The crosshairs will show the locked pad once autopilot engages
@@ -467,9 +516,16 @@ export function createGameStore() {
     const newConfig = createConfig(newWorld);
 
     // Regenerate terrain for new world size
-    const newTerrain = generateTerrain(newConfig.width, newConfig.height);
+    const newTerrain = generateTerrain(
+      newConfig.width,
+      newConfig.height,
+      0.6,
+      7,
+      newWorldId,
+    );
     setTerrain(newTerrain.terrain);
     setLandingPads(newTerrain.landingPads);
+    setRegionName(newTerrain.regionName);
     setStars(generateStars(newConfig.width, newConfig.height, 200));
 
     // Reset lander to orbit with new world parameters
@@ -487,9 +543,16 @@ export function createGameStore() {
     const currentWorld = world();
     const cfg = config();
 
-    const newTerrain = generateTerrain(cfg.width, cfg.height);
+    const newTerrain = generateTerrain(
+      cfg.width,
+      cfg.height,
+      0.6,
+      7,
+      currentWorld.id,
+    );
     setTerrain(newTerrain.terrain);
     setLandingPads(newTerrain.landingPads);
+    setRegionName(newTerrain.regionName);
     setLander(createInitialLander(cfg, currentWorld));
     setPadViabilities([]);
     setSelectedPadIndex(0);
@@ -500,6 +563,7 @@ export function createGameStore() {
     setGamePhase("orbit");
     setPaused(false);
     setLastFailureReason(null);
+    setLandedPadIndex(null);
 
     // Reset GNC autopilot state
     setGNCState(createGNCState());
@@ -551,13 +615,20 @@ export function createGameStore() {
 
     if (success) {
       setDemoSuccesses((s) => s + 1);
+      // Increment streak and calculate score
+      const newStreak = demoStreak() + 1;
+      setDemoStreak(newStreak);
+      const points = 100 * newStreak;
+      setDemoScore((s) => s + points);
     } else if (reason === "DAMAGED") {
       setDemoDamaged((d) => d + 1);
+      setDemoStreak(0); // Break the streak
       setFailureStats((stats) => ({
         ...stats,
         DAMAGED: stats.DAMAGED + 1,
       }));
     } else if (reason) {
+      setDemoStreak(0); // Break the streak
       setFailureStats((stats) => ({
         ...stats,
         [reason]: (stats[reason] || 0) + 1,
@@ -570,6 +641,8 @@ export function createGameStore() {
     setDemoAttempts(0);
     setDemoSuccesses(0);
     setDemoDamaged(0);
+    setDemoScore(0);
+    setDemoStreak(0);
     setFailureStats({
       VELOCITY_HIGH: 0,
       ANGLE_BAD: 0,
@@ -577,6 +650,38 @@ export function createGameStore() {
       OUT_OF_FUEL: 0,
       DAMAGED: 0,
     });
+  }
+
+  // Record human result with scoring
+  // Score: base 100 points, multiplied by streak (1x, 2x, 3x, etc.)
+  function recordHumanResult(success: boolean, reason: FailureReason = null) {
+    setHumanAttempts((a) => a + 1);
+    setLastFailureReason(reason);
+
+    if (success) {
+      setHumanSuccesses((s) => s + 1);
+      // Increment streak and calculate score
+      const newStreak = humanStreak() + 1;
+      setHumanStreak(newStreak);
+      const points = 100 * newStreak;
+      setHumanScore((s) => s + points);
+    } else if (reason === "DAMAGED") {
+      setHumanDamaged((d) => d + 1);
+      // Damaged landing breaks the streak but doesn't add to crashed count
+      setHumanStreak(0);
+    } else {
+      // Crashed - break the streak
+      setHumanStreak(0);
+    }
+  }
+
+  // Reset human stats
+  function resetHumanStats() {
+    setHumanAttempts(0);
+    setHumanSuccesses(0);
+    setHumanDamaged(0);
+    setHumanScore(0);
+    setHumanStreak(0);
   }
 
   // Input handlers
@@ -645,6 +750,124 @@ export function createGameStore() {
         // Select Boostback approach
         setApproachMode("boostback");
         break;
+      case "x":
+        // Toggle manual pad lock (only in manual mode, using same logic as autopilot)
+        if (autopilotMode() === "off") {
+          const currentState = gncState();
+          if (currentState.targetPadLocked) {
+            // Unlock - clear the target
+            setGNCState({
+              ...currentState,
+              targetPadLocked: false,
+              lockedDeorbitX: null,
+              lockedPadViable: true,
+              deorbitTimingDelta: null,
+              solution: null,
+            });
+            setTargetLocked(false);
+          } else {
+            // Lock the currently highlighted pad from the cone
+            const cone = landingCone();
+            if (cone.length > 0) {
+              // Get the highlighted pad index within the cone
+              const coneIdx = highlightedConeIndex() % cone.length;
+              const padIndex = cone[coneIdx];
+              const pads = landingPads();
+              const targetPad = pads[padIndex];
+
+              // Calculate deorbit solution for this pad
+              const solution = calculateTwoBurnSolution(
+                lander(),
+                config(),
+                terrain(),
+                pads,
+                targetPad,
+              );
+
+              // Debug: log the solution details
+              const padCenter = (targetPad.x1 + targetPad.x2) / 2;
+              console.log(
+                `[Manual Lock] Pad ${padIndex} center: ${padCenter.toFixed(0)}, Lander X: ${lander().position.x.toFixed(0)}, Vx: ${lander().velocity.x.toFixed(1)}`,
+              );
+              console.log(`[Manual Lock] Solution:`, {
+                hasSolution: !!solution.deorbit,
+                burnStartX: solution.deorbit?.burnStartX?.toFixed(0),
+                burnStartTime: solution.deorbit?.burn.startTime.toFixed(2),
+                predictedImpactX:
+                  solution.deorbit?.predictedImpactX?.toFixed(0),
+                horizontalError:
+                  solution.deorbit?.horizontalErrorAtImpact?.toFixed(0),
+              });
+
+              // Only lock if we have a valid deorbit solution with enough lead time
+              const hasValidDeorbit = solution.deorbit !== null;
+              const hasEnoughLeadTime =
+                solution.deorbit && solution.deorbit.burn.startTime > 1;
+
+              if (hasValidDeorbit && hasEnoughLeadTime) {
+                // Calculate the fixed optimal burn X based on pad and physics
+                const currentLander = lander();
+                const currentConfig = config();
+                const alt = altitude();
+                const optimalBurnX = calculateOptimalBurnX(
+                  padCenter,
+                  currentLander.velocity.x,
+                  currentConfig.gravity,
+                  currentConfig.maxThrust,
+                  alt,
+                  currentConfig.width,
+                );
+
+                // Lock the pad with deorbit point
+                setGNCState({
+                  ...currentState,
+                  targetPadIndex: padIndex,
+                  targetPadLocked: true,
+                  lockedPadViable: solution.viable,
+                  lockedDeorbitX: optimalBurnX,
+                  solution: solution,
+                });
+                setSelectedPadIndex(padIndex);
+                setTargetLocked(true);
+              } else {
+                console.log(
+                  `[Manual] Cannot lock pad - ${!hasValidDeorbit ? "no deorbit solution" : `burn in ${solution.deorbit?.burn.startTime.toFixed(1)}s (need >1s)`}`,
+                );
+              }
+            } else {
+              console.log(`[Manual] No pads in cone to lock`);
+            }
+          }
+        }
+        break;
+      case "[":
+        // Cycle to previous pad in cone (manual mode only)
+        if (autopilotMode() === "off" && !gncState().targetPadLocked) {
+          const cone = landingCone();
+          if (cone.length > 0) {
+            const current = highlightedConeIndex();
+            const newIdx = (current - 1 + cone.length) % cone.length;
+            setHighlightedConeIndex(newIdx);
+            console.log(
+              `[Manual] Highlighting pad ${cone[newIdx]} (${newIdx + 1}/${cone.length})`,
+            );
+          }
+        }
+        break;
+      case "]":
+        // Cycle to next pad in cone (manual mode only)
+        if (autopilotMode() === "off" && !gncState().targetPadLocked) {
+          const cone = landingCone();
+          if (cone.length > 0) {
+            const current = highlightedConeIndex();
+            const newIdx = (current + 1) % cone.length;
+            setHighlightedConeIndex(newIdx);
+            console.log(
+              `[Manual] Highlighting pad ${cone[newIdx]} (${newIdx + 1}/${cone.length})`,
+            );
+          }
+        }
+        break;
     }
   }
 
@@ -681,6 +904,7 @@ export function createGameStore() {
     padViabilities,
     selectedPadIndex,
     landingCone,
+    highlightedConeIndex,
     stars,
     input,
     autopilotMode,
@@ -711,8 +935,23 @@ export function createGameStore() {
     demoAttempts,
     demoSuccesses,
     demoDamaged,
+    demoScore,
+    demoStreak,
     failureStats,
     lastFailureReason,
+
+    // Human stats
+    humanAttempts,
+    humanSuccesses,
+    humanDamaged,
+    humanScore,
+    humanStreak,
+
+    // Landing info
+    landedPadIndex,
+    setLandedPadIndex,
+    landedPadDesignation,
+    regionName,
 
     // Derived
     altitude,
@@ -721,12 +960,15 @@ export function createGameStore() {
     horizontalSpeed,
     isLandingZone,
     landingStatus,
+    currentWindEffect,
 
     // Actions
     reset,
     updateViabilities,
     recordDemoResult,
     resetDemoStats,
+    recordHumanResult,
+    resetHumanStats,
     handleKeyDown,
     handleKeyUp,
 

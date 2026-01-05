@@ -13,6 +13,7 @@ import type {
   LandingOutcome,
   GamePhase,
   AutopilotMode,
+  ApproachMode,
 } from "./types";
 import type { WorldId } from "./worlds";
 
@@ -41,6 +42,7 @@ export interface FlightRecord {
   timestamp: string; // ISO timestamp of flight start
   worldId: WorldId; // Moon or Mars
   mode: AutopilotMode; // off, stabilize, land, demo
+  approachMode: ApproachMode | null; // stop_drop or boostback (null if manual)
 
   // Initial conditions
   initial: {
@@ -81,6 +83,7 @@ export interface FlightRecord {
     maxSpeed: number; // Maximum speed during descent
     maxDescentRate: number; // Maximum vertical velocity
     maxHorizontalSpeed: number; // Maximum horizontal velocity
+    maxGs: number; // Maximum G-force experienced during flight
     minAltitude: number; // Lowest altitude before landing
     fuelUsed: number; // Total fuel consumed
     horizontalErrorAtTouchdown: number; // Distance from pad center at landing
@@ -107,6 +110,7 @@ export class FlightLogger {
   constructor(
     worldId: WorldId,
     mode: AutopilotMode,
+    approachMode: ApproachMode | null,
     lander: LanderState,
     targetPad: LandingPad | null,
     targetPadIndex: number | null,
@@ -116,6 +120,7 @@ export class FlightLogger {
       timestamp: new Date().toISOString(),
       worldId,
       mode,
+      approachMode,
       initial: {
         x: lander.position.x,
         y: lander.position.y,
@@ -146,6 +151,7 @@ export class FlightLogger {
         maxSpeed: 0,
         maxDescentRate: 0,
         maxHorizontalSpeed: 0,
+        maxGs: 0,
         minAltitude: Infinity,
         fuelUsed: 0,
         horizontalErrorAtTouchdown: 0,
@@ -180,9 +186,7 @@ export class FlightLogger {
     }
 
     // Update metrics
-    const speed = Math.sqrt(
-      lander.velocity.x ** 2 + lander.velocity.y ** 2,
-    );
+    const speed = Math.sqrt(lander.velocity.x ** 2 + lander.velocity.y ** 2);
     this.record.metrics.maxSpeed = Math.max(
       this.record.metrics.maxSpeed,
       speed,
@@ -194,6 +198,10 @@ export class FlightLogger {
     this.record.metrics.maxHorizontalSpeed = Math.max(
       this.record.metrics.maxHorizontalSpeed,
       Math.abs(lander.velocity.x),
+    );
+    this.record.metrics.maxGs = Math.max(
+      this.record.metrics.maxGs,
+      lander.maxGs,
     );
     this.record.metrics.minAltitude = Math.min(
       this.record.metrics.minAltitude,
@@ -240,9 +248,7 @@ export class FlightLogger {
     failureReason: FailureReason,
     landedPadIndex: number | null,
   ): FlightRecord {
-    const speed = Math.sqrt(
-      lander.velocity.x ** 2 + lander.velocity.y ** 2,
-    );
+    const speed = Math.sqrt(lander.velocity.x ** 2 + lander.velocity.y ** 2);
 
     this.record.outcome = outcome;
     this.record.failureReason = failureReason;
@@ -263,8 +269,7 @@ export class FlightLogger {
     this.record.metrics.fuelUsed = this.record.initial.fuel - lander.fuel;
     this.record.metrics.verticalSpeedAtTouchdown = lander.velocity.y;
     this.record.metrics.horizontalSpeedAtTouchdown = lander.velocity.x;
-    this.record.metrics.angleAtTouchdown =
-      lander.rotation * (180 / Math.PI);
+    this.record.metrics.angleAtTouchdown = lander.rotation * (180 / Math.PI);
 
     // Calculate horizontal error from target pad
     if (this.record.initial.targetPadX !== null) {
@@ -353,6 +358,22 @@ export function clearFlightRecords(): void {
 }
 
 /**
+ * Get recent flight records (last N flights)
+ */
+export function getRecentFlightRecords(count: number = 100): FlightRecord[] {
+  const all = loadFlightRecords();
+  return all.slice(-count);
+}
+
+/**
+ * Get flight records from the last N hours
+ */
+export function getFlightRecordsSince(hours: number): FlightRecord[] {
+  const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  return loadFlightRecords().filter((r) => r.timestamp >= cutoff);
+}
+
+/**
  * Get flight statistics summary
  */
 export function getFlightStats(): {
@@ -365,6 +386,10 @@ export function getFlightStats(): {
   avgFlightTime: number;
   byWorld: Record<WorldId, { total: number; successes: number }>;
   byMode: Record<AutopilotMode, { total: number; successes: number }>;
+  byApproachMode: Record<
+    string,
+    { total: number; successes: number; avgFuel: number }
+  >;
   byFailureReason: Record<string, number>;
 } {
   const records = loadFlightRecords();
@@ -379,6 +404,10 @@ export function getFlightStats(): {
     avgFlightTime: 0,
     byWorld: {} as Record<WorldId, { total: number; successes: number }>,
     byMode: {} as Record<AutopilotMode, { total: number; successes: number }>,
+    byApproachMode: {} as Record<
+      string,
+      { total: number; successes: number; avgFuel: number; totalFuel: number }
+    >,
     byFailureReason: {} as Record<string, number>,
   };
 
@@ -415,6 +444,24 @@ export function getFlightStats(): {
       stats.byMode[record.mode].successes++;
     }
 
+    // By approach mode (only for autopilot flights)
+    if (record.approachMode) {
+      if (!stats.byApproachMode[record.approachMode]) {
+        stats.byApproachMode[record.approachMode] = {
+          total: 0,
+          successes: 0,
+          avgFuel: 0,
+          totalFuel: 0,
+        };
+      }
+      stats.byApproachMode[record.approachMode].total++;
+      stats.byApproachMode[record.approachMode].totalFuel +=
+        record.metrics.fuelUsed;
+      if (record.outcome === "success") {
+        stats.byApproachMode[record.approachMode].successes++;
+      }
+    }
+
     // By failure reason
     if (record.failureReason) {
       stats.byFailureReason[record.failureReason] =
@@ -425,6 +472,13 @@ export function getFlightStats(): {
   stats.successRate = (stats.successes / stats.total) * 100;
   stats.avgFuelUsed = totalFuel / stats.total;
   stats.avgFlightTime = totalTime / stats.total;
+
+  // Calculate average fuel per approach mode
+  for (const mode of Object.keys(stats.byApproachMode)) {
+    const modeStats = stats.byApproachMode[mode];
+    modeStats.avgFuel =
+      modeStats.total > 0 ? modeStats.totalFuel / modeStats.total : 0;
+  }
 
   return stats;
 }

@@ -5,6 +5,7 @@ import type {
   GamePhase,
   FailureReason,
   LandingOutcome,
+  WindEffect,
 } from "../lib/types";
 import type { WorldId } from "../lib/worlds";
 import { WORLDS } from "../lib/worlds";
@@ -28,6 +29,14 @@ interface HUDProps {
   demoAttempts: number;
   demoSuccesses: number;
   demoDamaged: number;
+  demoScore: number;
+  demoStreak: number;
+  // Human stats
+  humanAttempts: number;
+  humanSuccesses: number;
+  humanDamaged: number;
+  humanScore: number;
+  humanStreak: number;
   // New props
   gamePhase: GamePhase;
   worldName: string;
@@ -40,6 +49,11 @@ interface HUDProps {
   currentWorldId: WorldId;
   approachMode: ApproachMode;
   onSelectApproach: (mode: ApproachMode) => void;
+  windEffect: WindEffect;
+  hasAtmosphere: boolean;
+  onSelectAutopilot: (mode: AutopilotMode) => void;
+  regionName: string;
+  landedPadDesignation: string | null;
 }
 
 // Failure reason display messages
@@ -80,6 +94,20 @@ const HUD: Component<HUDProps> = (props) => {
     if (props.fuel > 20) return "warning";
     return "danger";
   });
+
+  // Wind direction arrow
+  const windArrow = createMemo(() => {
+    const windX = props.windEffect.windX;
+    if (Math.abs(windX) < 2) return "";
+    return windX > 0 ? "→" : "←";
+  });
+
+  const windSpeed = createMemo(() =>
+    Math.abs(props.windEffect.windX).toFixed(0),
+  );
+  const airDensity = createMemo(() =>
+    (props.windEffect.density * 100).toFixed(0),
+  );
 
   const speedStatus = createMemo(() => {
     if (props.verticalSpeed < 10) return "ok";
@@ -166,6 +194,21 @@ const HUD: Component<HUDProps> = (props) => {
             </div>
             <div class={`value ${fuelStatus()}`}>{fuelPercent()}%</div>
           </div>
+
+          {/* Wind indicator - only for atmospheric worlds */}
+          <Show when={props.hasAtmosphere && props.windEffect.density > 0}>
+            <div class="telemetry-block wind">
+              <div class="label">WIND</div>
+              <div class="value seven-segment wind-value">
+                {windArrow()} {windSpeed()}
+              </div>
+              <div class="unit">M/S</div>
+              <div class="density-indicator">
+                <span class="density-label">ρ</span>
+                <span class="density-value">{airDensity()}%</span>
+              </div>
+            </div>
+          </Show>
         </div>
       </div>
 
@@ -229,24 +272,28 @@ const HUD: Component<HUDProps> = (props) => {
           <button
             class={`mode-btn ${props.autopilotMode === "off" ? "active" : ""}`}
             data-key="1"
+            onClick={() => props.onSelectAutopilot("off")}
           >
             [1] OFF
           </button>
           <button
             class={`mode-btn ${props.autopilotMode === "stabilize" ? "active" : ""}`}
             data-key="2"
+            onClick={() => props.onSelectAutopilot("stabilize")}
           >
             [2] STAB
           </button>
           <button
             class={`mode-btn ${props.autopilotMode === "land" ? "active" : ""}`}
             data-key="3"
+            onClick={() => props.onSelectAutopilot("land")}
           >
             [3] LAND
           </button>
           <button
             class={`mode-btn ${props.autopilotMode === "demo" ? "active" : ""}`}
             data-key="0"
+            onClick={() => props.onSelectAutopilot("demo")}
           >
             [0] DEMO
           </button>
@@ -276,32 +323,77 @@ const HUD: Component<HUDProps> = (props) => {
         </div>
       </Show>
 
-      {/* Demo stats */}
-      <Show when={props.autopilotMode === "demo" || props.demoAttempts > 0}>
-        <div class="hud-demo-stats">
-          <div class="demo-stats-label">DEMO STATS</div>
-          <div class="demo-stats-row">
+      {/* Stats panel - shows demo stats in demo mode, human stats in manual mode */}
+      <Show when={props.autopilotMode === "demo"}>
+        <div class="hud-stats-panel">
+          <div class="stats-label">DEMO STATS</div>
+          <div class="stats-row score">
+            <span class="stat-value">{props.demoScore}</span>
+            <span class="stat-label">SCORE</span>
+          </div>
+          <div class="stats-row streak">
+            <span class="stat-value">
+              {props.demoStreak > 0 ? `${props.demoStreak}x` : "-"}
+            </span>
+            <span class="stat-label">STREAK</span>
+          </div>
+          <div class="stats-row">
             <span class="stat-value">{props.demoSuccesses}</span>
             <span class="stat-label">LANDED</span>
           </div>
-          <div class="demo-stats-row damaged">
+          <div class="stats-row damaged">
             <span class="stat-value">{props.demoDamaged}</span>
             <span class="stat-label">DAMAGED</span>
           </div>
-          <div class="demo-stats-row">
+          <div class="stats-row">
             <span class="stat-value">
               {props.demoAttempts - props.demoSuccesses - props.demoDamaged}
             </span>
             <span class="stat-label">CRASHED</span>
           </div>
-          <div class="demo-stats-row">
-            <span class="stat-value">{props.demoAttempts}</span>
-            <span class="stat-label">TOTAL</span>
-          </div>
-          <div class="demo-stats-row success-rate">
+          <div class="stats-row success-rate">
             <span class="stat-value">
               {props.demoAttempts > 0
                 ? Math.round((props.demoSuccesses / props.demoAttempts) * 100)
+                : 0}
+              %
+            </span>
+            <span class="stat-label">SUCCESS</span>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={props.autopilotMode === "off"}>
+        <div class="hud-stats-panel">
+          <div class="stats-label">HUMAN STATS</div>
+          <div class="stats-row score">
+            <span class="stat-value">{props.humanScore}</span>
+            <span class="stat-label">SCORE</span>
+          </div>
+          <div class="stats-row streak">
+            <span class="stat-value">
+              {props.humanStreak > 0 ? `${props.humanStreak}x` : "-"}
+            </span>
+            <span class="stat-label">STREAK</span>
+          </div>
+          <div class="stats-row">
+            <span class="stat-value">{props.humanSuccesses}</span>
+            <span class="stat-label">LANDED</span>
+          </div>
+          <div class="stats-row damaged">
+            <span class="stat-value">{props.humanDamaged}</span>
+            <span class="stat-label">DAMAGED</span>
+          </div>
+          <div class="stats-row">
+            <span class="stat-value">
+              {props.humanAttempts - props.humanSuccesses - props.humanDamaged}
+            </span>
+            <span class="stat-label">CRASHED</span>
+          </div>
+          <div class="stats-row success-rate">
+            <span class="stat-value">
+              {props.humanAttempts > 0
+                ? Math.round((props.humanSuccesses / props.humanAttempts) * 100)
                 : 0}
               %
             </span>
@@ -333,8 +425,10 @@ const HUD: Component<HUDProps> = (props) => {
       {/* Success message */}
       <Show when={props.landed && props.outcome === "success"}>
         <div class="message success">
-          <div class="message-title">THE EAGLE HAS LANDED</div>
-          <div class="message-subtitle">TRANQUILITY BASE HERE</div>
+          <div class="message-title">THE DROPSHIP HAS LANDED</div>
+          <div class="message-subtitle">
+            {props.regionName} - PAD {props.landedPadDesignation}
+          </div>
           <div class="message-hint">Press [R] for new mission</div>
         </div>
       </Show>
@@ -347,6 +441,10 @@ const HUD: Component<HUDProps> = (props) => {
         <span>[P] Pause</span>
         <span>[R] Reset</span>
         <span>[C] Arc</span>
+        <Show when={props.autopilotMode === "off"}>
+          <span>[ ] Cycle Pad</span>
+          <span>[X] Lock Target</span>
+        </Show>
         <span>[L] Log</span>
       </div>
     </div>

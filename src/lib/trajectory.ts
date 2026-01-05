@@ -14,6 +14,12 @@ import type {
   LandingPad,
 } from "./types";
 import { getTerrainHeightAt } from "./physics";
+import {
+  calculateHorizontalError,
+  calculateWrappedDistance,
+  getPadCenter,
+  getPadWidth,
+} from "./utils";
 
 /**
  * A point along a predicted trajectory
@@ -166,19 +172,21 @@ export function predictTrajectory(
   if (impactPoint) {
     for (let i = 0; i < pads.length; i++) {
       const pad = pads[i];
-      const padCenter = (pad.x1 + pad.x2) / 2;
+      const padCenter = getPadCenter(pad);
 
       // Calculate distance with wraparound
-      let dx = Math.abs(impactPoint.x - padCenter);
-      if (dx > config.width / 2) dx = config.width - dx;
+      const dx = calculateWrappedDistance(
+        impactPoint.x,
+        padCenter,
+        config.width,
+      );
 
       if (dx < distanceFromPad) {
         distanceFromPad = dx;
         closestPad = i;
 
         // Check if actually on pad
-        const padWidth = pad.x2 - pad.x1;
-        onPad = dx <= padWidth / 2;
+        onPad = dx <= getPadWidth(pad) / 2;
       }
     }
   }
@@ -194,6 +202,56 @@ export function predictTrajectory(
     onPad,
     burnApplied: burn !== null,
   };
+}
+
+/**
+ * Calculate the optimal burn X position relative to a pad
+ *
+ * This is a FIXED world position based on:
+ * - Pad center location
+ * - Orbital velocity (determines drift during burn)
+ * - Gravity and thrust (determines burn duration)
+ * - Altitude (determines coast time after burn)
+ *
+ * The result is independent of where the lander currently is.
+ */
+export function calculateOptimalBurnX(
+  padCenter: number,
+  orbitalVelocity: number,
+  gravity: number,
+  maxThrust: number,
+  altitude: number,
+  worldWidth: number,
+): number {
+  // Burn duration to kill horizontal velocity
+  // Using 85% throttle for safety margin
+  const effectiveDecel = maxThrust * 0.85;
+  const burnDuration = Math.abs(orbitalVelocity) / effectiveDecel;
+
+  // Drift during burn (velocity decreases linearly from vx to 0)
+  // Average velocity = vx/2, so drift = vx/2 * burnDuration = vx * burnDuration / 2
+  const driftDuringBurn = (orbitalVelocity * burnDuration) / 2;
+
+  // Estimate fall time after burn
+  const fallTime = Math.sqrt((2 * altitude) / gravity);
+
+  // Small residual drift during coast (assume ~5% residual velocity)
+  const residualVx = orbitalVelocity * 0.05;
+  const driftDuringCoast = residualVx * fallTime;
+
+  // Total drift from burn start to landing
+  const totalDrift = driftDuringBurn + driftDuringCoast;
+
+  // Optimal burn position: pad center minus drift
+  // If moving right (positive velocity), burn point is to the LEFT of pad
+  // If moving left (negative velocity), burn point is to the RIGHT of pad
+  let burnX = padCenter - totalDrift;
+
+  // Wrap to world bounds
+  if (burnX < 0) burnX += worldWidth;
+  if (burnX >= worldWidth) burnX -= worldWidth;
+
+  return burnX;
 }
 
 /**
@@ -302,8 +360,7 @@ export function calculateDeorbitBurn(
   const totalDrift = driftDuringBurn + driftDuringCoast;
 
   // Binary search for optimal burn start time
-  // We want to find t such that we land on the pad
-  // Expanded search range to account for drift uncertainty
+  // Search from now (0) to when we'd reach the pad center
   const solution = binarySearchBurnTiming(
     lander,
     config,
@@ -313,8 +370,14 @@ export function calculateDeorbitBurn(
     burnAngle,
     burnDuration,
     0, // Min start time (now)
-    Math.max(0, timeToTarget), // Max start time - full time to target
+    Math.max(0, timeToTarget), // Max start time
   );
+
+  if (solution) {
+    console.log(
+      `[Trajectory] Solution: startTime=${solution.burn.startTime.toFixed(2)}s, burnStartX=${solution.burnStartX.toFixed(0)}, padCenter=${padCenter.toFixed(0)}, error=${solution.horizontalErrorAtImpact.toFixed(0)}`,
+    );
+  }
 
   return solution;
 }
@@ -404,15 +467,19 @@ function binarySearchBurnTiming(
     if (!prediction.impactPoint) continue;
 
     // Calculate landing error (with wraparound)
-    let error = prediction.impactPoint.x - padCenter;
-    if (Math.abs(error) > config.width / 2) {
-      error = error > 0 ? error - config.width : error + config.width;
-    }
+    const error = calculateHorizontalError(
+      prediction.impactPoint.x,
+      padCenter,
+      config.width,
+    );
     const absError = Math.abs(error);
 
     // Calculate burn start position
+    // The autopilot actually starts burning when startTime <= 0.5s,
+    // so add 0.5s worth of travel to get the actual burn position
+    const actualBurnTime = startTime + 0.5;
     let burnStartX =
-      (lander.position.x + lander.velocity.x * startTime) % config.width;
+      (lander.position.x + lander.velocity.x * actualBurnTime) % config.width;
     if (burnStartX < 0) burnStartX += config.width;
 
     // Estimate fuel cost
@@ -502,10 +569,11 @@ function refineBurnTiming(
 
     if (!prediction.impactPoint) continue;
 
-    let error = prediction.impactPoint.x - padCenter;
-    if (Math.abs(error) > config.width / 2) {
-      error = error > 0 ? error - config.width : error + config.width;
-    }
+    const error = calculateHorizontalError(
+      prediction.impactPoint.x,
+      padCenter,
+      config.width,
+    );
 
     if (Math.abs(error) < bestError) {
       bestError = Math.abs(error);
@@ -526,11 +594,11 @@ function refineBurnTiming(
 
   if (!finalPrediction.impactPoint) return null;
 
-  let finalError = finalPrediction.impactPoint.x - padCenter;
-  if (Math.abs(finalError) > config.width / 2) {
-    finalError =
-      finalError > 0 ? finalError - config.width : finalError + config.width;
-  }
+  const finalError = calculateHorizontalError(
+    finalPrediction.impactPoint.x,
+    padCenter,
+    config.width,
+  );
 
   const burnStartX =
     (lander.position.x + lander.velocity.x * bestBurn.startTime) % config.width;
@@ -938,16 +1006,14 @@ export function calculateRealTimeGuidance(
   solution: TwoBurnSolution | null,
   altitude: number,
 ): GuidanceState {
-  const padCenter = (targetPad.x1 + targetPad.x2) / 2;
+  const padCenter = getPadCenter(targetPad);
 
   // Calculate current horizontal error
-  let horizontalError = padCenter - lander.position.x;
-  if (Math.abs(horizontalError) > config.width / 2) {
-    horizontalError =
-      horizontalError > 0
-        ? horizontalError - config.width
-        : horizontalError + config.width;
-  }
+  const horizontalError = calculateHorizontalError(
+    lander.position.x,
+    padCenter,
+    config.width,
+  );
 
   // Default: coast (no thrust, stay upright)
   const defaultGuidance: GuidanceState = {

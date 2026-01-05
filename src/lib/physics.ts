@@ -7,7 +7,10 @@ import type {
   CollisionResult,
   FailureReason,
   LandingOutcome,
+  WindEffect,
 } from "./types";
+import type { AtmosphereConfig } from "./worlds";
+import { getWindEffectAt } from "./atmosphere";
 
 /**
  * Update lander physics for one timestep
@@ -23,6 +26,9 @@ export function updatePhysics(
   thrustInput: number, // 0-1
   rotationInput: number, // -1 to 1
   dt: number,
+  atmosphere?: AtmosphereConfig,
+  gameTime?: number,
+  altitude?: number,
 ): LanderState {
   if (!lander.alive || lander.landed) {
     return lander;
@@ -68,6 +74,9 @@ export function updatePhysics(
 
   // DESCENT MODE: Normal physics after first burn
 
+  // Store previous velocity for G-force calculation
+  const prevVelocity = { x: lander.velocity.x, y: lander.velocity.y };
+
   // Calculate thrust (only if fuel available)
   const actualThrust = next.fuel > 0 ? thrustInput * config.maxThrust : 0;
   next.thrust = actualThrust / config.maxThrust;
@@ -92,6 +101,38 @@ export function updatePhysics(
   // Apply forces (thrust + gravity)
   next.velocity.x += thrustVec.x * dt;
   next.velocity.y += (thrustVec.y + config.gravity) * dt;
+
+  // Apply atmospheric effects (wind, drag, and attitude disturbance) if atmosphere exists
+  if (atmosphere && altitude !== undefined && gameTime !== undefined) {
+    const windEffect = getWindEffectAt(
+      altitude,
+      next.velocity,
+      atmosphere,
+      gameTime,
+    );
+    // Apply drag forces (minimal on Mars - too thin to brake effectively)
+    next.velocity.x += windEffect.dragX * dt;
+    next.velocity.y += windEffect.dragY * dt;
+    // Apply torque - the "wobble" effect from thin atmosphere
+    // Mars: thick enough to push you around, too thin to slow you down
+    next.angularVelocity += windEffect.torque * dt;
+  }
+
+  // Calculate G-forces felt by occupants
+  // G-force is what occupants feel from thrust relative to Earth gravity
+  // This is what matters for human tolerance - how much force vs standing on Earth
+  //
+  // Game scale: 20 px/s² = 1.62 m/s² (Moon), so 1 m/s² = 12.35 px/s²
+  // Earth gravity (9.81 m/s²) = 121 px/s² in game units
+  //
+  // Examples at full thrust:
+  // - Moon (60 px/s²): 60/121 = 0.5G felt
+  // - Mars (140 px/s²): 140/121 = 1.16G felt
+  // - Earth (300 px/s²): 300/121 = 2.5G felt
+  const EARTH_G_IN_GAME_UNITS = 121; // px/s² equivalent to 1G
+  const thrustAccel = actualThrust; // px/s² from engines
+  next.currentGs = thrustAccel / EARTH_G_IN_GAME_UNITS;
+  next.maxGs = Math.max(next.maxGs, next.currentGs);
 
   // Update position
   next.position.x += next.velocity.x * dt;

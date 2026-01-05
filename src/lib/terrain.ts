@@ -1,4 +1,6 @@
 import type { TerrainPoint, LandingPad } from "./types";
+import type { WorldId } from "./worlds";
+import { MOON_LOCATIONS, MARS_LOCATIONS } from "./worlds";
 
 /**
  * Pad widths by multiplier (based on 44px lander leg span)
@@ -21,7 +23,8 @@ export function generateTerrain(
   height: number,
   roughness: number = 0.6,
   iterations: number = 7,
-): { terrain: TerrainPoint[]; landingPads: LandingPad[] } {
+  worldId: WorldId = "moon",
+): { terrain: TerrainPoint[]; landingPads: LandingPad[]; regionName: string } {
   // Start with endpoints
   const baseY = height * 0.75; // Ground level at 75% of height
   let points: TerrainPoint[] = [
@@ -56,6 +59,11 @@ export function generateTerrain(
     displacement *= roughness; // Reduce displacement each iteration
   }
 
+  // Pick a random region name for this terrain
+  const locationNames = worldId === "mars" ? MARS_LOCATIONS : MOON_LOCATIONS;
+  const regionName =
+    locationNames[Math.floor(Math.random() * locationNames.length)];
+
   // Generate multiple landing pads
   const landingPads = generateLandingPads(points, width, height, baseY);
 
@@ -64,8 +72,13 @@ export function generateTerrain(
     points = flattenTerrainForPad(points, pad);
   }
 
-  return { terrain: points, landingPads };
+  return { terrain: points, landingPads, regionName };
 }
+
+/**
+ * Pad designations (A-Z for up to 26 pads)
+ */
+const PAD_DESIGNATIONS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 /**
  * Generate multiple landing pads with varying difficulties
@@ -119,12 +132,16 @@ function generateLandingPads(
     // 20% chance pad is occupied by a rocket awaiting takeoff
     const occupied = Math.random() < 0.2;
 
+    // Pad designation (A, B, C, ...)
+    const designation = PAD_DESIGNATIONS[i % PAD_DESIGNATIONS.length];
+
     pads.push({
       x1: padStart,
       x2: padEnd,
       y: padY,
       multiplier,
       occupied,
+      designation,
     });
   }
 

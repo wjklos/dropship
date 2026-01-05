@@ -6,6 +6,7 @@ import {
   onCleanup,
 } from "solid-js";
 import type { Vec2, LandingPad } from "../lib/types";
+import type { WorldId } from "../lib/worlds";
 
 interface DebrisPiece {
   id: number;
@@ -32,10 +33,12 @@ interface CrashDebrisProps {
   active: boolean;
   // Optional: pad that was crashed into (for rocket explosion)
   crashedPad?: LandingPad;
+  // World ID for theming
+  worldId: WorldId;
 }
 
-// Define lander parts as SVG paths (relative to center)
-const LANDER_PARTS = [
+// Define Moon lander parts as SVG paths (relative to center) - Apollo style
+const MOON_LANDER_PARTS = [
   // Main body (descent stage)
   { path: "M -12,-8 L 12,-8 L 15,5 L -15,5 Z", mass: 1.0 },
   // Ascent stage (top)
@@ -52,6 +55,30 @@ const LANDER_PARTS = [
   { path: "M -15,-2 L -18,-2", mass: 0.1 },
   // Right RCS
   { path: "M 15,-2 L 18,-2", mass: 0.1 },
+];
+
+// Define Mars lander parts as SVG paths - capsule style
+const MARS_LANDER_PARTS = [
+  // Heat shield (curved bottom)
+  { path: "M -14,6 Q -14,12 0,14 Q 14,12 14,6", mass: 1.2 },
+  // Main capsule body left
+  { path: "M -14,6 L -14,-10 Q -14,-18 -8,-18", mass: 0.8 },
+  // Main capsule body right
+  { path: "M 14,6 L 14,-10 Q 14,-18 8,-18", mass: 0.8 },
+  // Top section
+  { path: "M -8,-18 L 8,-18", mass: 0.4 },
+  // Left window
+  { path: "M -6,-12 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0", mass: 0.2 },
+  // Right window
+  { path: "M 6,-12 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0", mass: 0.2 },
+  // Docking port
+  { path: "M -4,-22 L -4,-18 M 4,-22 L 4,-18 M -4,-22 L 4,-22", mass: 0.3 },
+  // Engine nozzle
+  { path: "M -5,14 L -6,20 L 6,20 L 5,14", mass: 0.5 },
+  // Left leg
+  { path: "M -10,10 L -18,20 M -20,20 L -16,20", mass: 0.3 },
+  // Right leg
+  { path: "M 10,10 L 18,20 M 16,20 L 20,20", mass: 0.3 },
 ];
 
 // Define rocket parts (matching Terrain.tsx rocket design)
@@ -85,8 +112,13 @@ const CrashDebris: Component<CrashDebrisProps> = (props) => {
       );
       const explosionForce = Math.min(impactSpeed * 0.5, 80);
 
+      // Select lander parts based on world, but always use green color
+      const landerParts =
+        props.worldId === "mars" ? MARS_LANDER_PARTS : MOON_LANDER_PARTS;
+      const landerColor = "#00ff88"; // Always green to match lander
+
       // Generate lander debris
-      LANDER_PARTS.forEach((part, i) => {
+      landerParts.forEach((part, i) => {
         const angle = Math.random() * Math.PI * 2;
         const speed =
           (explosionForce * (0.3 + Math.random() * 0.7)) / part.mass;
@@ -105,7 +137,7 @@ const CrashDebris: Component<CrashDebrisProps> = (props) => {
             Math.random() * 40,
           vr: (Math.random() - 0.5) * 400,
           opacity: 1,
-          color: "var(--vector-primary)",
+          color: landerColor,
         });
       });
 
