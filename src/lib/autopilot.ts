@@ -39,6 +39,9 @@ export {
   // GNC autopilot
   createGNCState,
   computeGNCAutopilot,
+  triggerAbort,
+  canTriggerAbort,
+  areControlsLockedForAbort,
 
   // Targeting
   simulateTrajectoryToPad,

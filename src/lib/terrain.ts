@@ -1,6 +1,10 @@
 import type { TerrainPoint, LandingPad } from "./types";
-import type { WorldId } from "./worlds";
-import { MOON_LOCATIONS, MARS_LOCATIONS } from "./worlds";
+import {
+  type WorldId,
+  MOON_LOCATIONS,
+  MARS_LOCATIONS,
+  EARTH_LOCATIONS,
+} from "./worldRegistry";
 
 /**
  * Pad widths by multiplier (based on 44px lander leg span)
@@ -60,12 +64,28 @@ export function generateTerrain(
   }
 
   // Pick a random region name for this terrain
-  const locationNames = worldId === "mars" ? MARS_LOCATIONS : MOON_LOCATIONS;
+  const locationNames =
+    worldId === "mars"
+      ? MARS_LOCATIONS
+      : worldId === "earth"
+        ? EARTH_LOCATIONS
+        : MOON_LOCATIONS;
   const regionName =
     locationNames[Math.floor(Math.random() * locationNames.length)];
 
+  // Earth-specific: Mark water vs land segments
+  if (worldId === "earth") {
+    points = markEarthWaterSegments(points, height);
+  }
+
   // Generate multiple landing pads
-  const landingPads = generateLandingPads(points, width, height, baseY);
+  const landingPads = generateLandingPads(
+    points,
+    width,
+    height,
+    baseY,
+    worldId,
+  );
 
   // Flatten terrain at each pad location
   for (const pad of landingPads) {
@@ -73,6 +93,27 @@ export function generateTerrain(
   }
 
   return { terrain: points, landingPads, regionName };
+}
+
+/**
+ * Mark water vs land segments for Earth terrain
+ * Water level is at 75% down from top, areas below become flat water surface
+ */
+function markEarthWaterSegments(
+  points: TerrainPoint[],
+  height: number,
+): TerrainPoint[] {
+  const waterLevel = height * 0.75; // Water at 75% down from top
+
+  return points.map((point) => {
+    if (point.y > waterLevel) {
+      // Below water level = water (flatten to water surface)
+      return { ...point, y: waterLevel, isWater: true };
+    } else {
+      // Above water level = land
+      return { ...point, isWater: false };
+    }
+  });
 }
 
 /**
@@ -88,6 +129,7 @@ function generateLandingPads(
   width: number,
   height: number,
   baseY: number,
+  worldId: WorldId = "moon",
 ): LandingPad[] {
   // Determine number of pads based on width (minimum 3, roughly 1 per 180px)
   const padCount = Math.max(3, Math.floor(width / 180));
@@ -135,14 +177,30 @@ function generateLandingPads(
     // Pad designation (A, B, C, ...)
     const designation = PAD_DESIGNATIONS[i % PAD_DESIGNATIONS.length];
 
-    pads.push({
+    // Check if this pad is on water (Earth only)
+    const isOnWater =
+      worldId === "earth" &&
+      terrain.some(
+        (p) => p.x >= padStart && p.x <= padEnd && p.isWater === true,
+      );
+
+    const pad: LandingPad = {
       x1: padStart,
       x2: padEnd,
       y: padY,
       multiplier,
       occupied,
       designation,
-    });
+    };
+
+    // Add floating pad properties if on water
+    if (isOnWater) {
+      pad.isFloating = true;
+      pad.wavePhase = Math.random() * Math.PI * 2; // Random wave offset
+      pad.baseY = padY;
+    }
+
+    pads.push(pad);
   }
 
   // Ensure at least one pad is NOT occupied (so landing is possible)

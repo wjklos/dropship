@@ -31,6 +31,8 @@ interface TerrainProps {
   width: number;
   height: number;
   destroyedPadIndex: number | null; // Pad with destroyed rocket (from crash)
+  time?: number; // Game time for wave animation (Earth)
+  worldId?: string; // World ID for Earth-specific features
 }
 
 const Terrain: Component<TerrainProps> = (props) => {
@@ -49,10 +51,56 @@ const Terrain: Component<TerrainProps> = (props) => {
     return path;
   });
 
+  // Earth-specific: Separate land and water segments
+  const landSegments = createMemo(() =>
+    props.terrain.filter((p) => !p.isWater),
+  );
+
+  const waterSegments = createMemo(() =>
+    props.terrain.filter((p) => p.isWater === true),
+  );
+
+  // Water surface with animated waves
+  const waterPath = createMemo(() => {
+    const water = waterSegments();
+    if (water.length === 0) return "";
+
+    const time = props.time || 0;
+    let path = `M ${water[0].x} ${water[0].y}`;
+
+    for (let i = 1; i < water.length; i++) {
+      // Add subtle wave motion
+      const waveY = water[i].y + Math.sin(water[i].x * 0.02 + time * 0.001) * 2;
+      path += ` L ${water[i].x} ${waveY}`;
+    }
+
+    return path;
+  });
+
   return (
     <g class="terrain">
       {/* Terrain fill - subtle, uses world theme color */}
       <path d={terrainPath()} fill="var(--world-terrain)" stroke="none" />
+
+      {/* Earth water surface */}
+      {waterSegments().length > 0 && (
+        <>
+          {/* Water fill below surface */}
+          <path
+            d={`${waterPath()} L ${props.width} ${props.height} L 0 ${props.height} Z`}
+            fill="var(--world-water, #1A4D6D)"
+            opacity="0.6"
+          />
+          {/* Animated water surface line */}
+          <path
+            d={waterPath()}
+            fill="none"
+            stroke="var(--world-water-stroke, #2A6D8D)"
+            stroke-width="2"
+            opacity="0.8"
+          />
+        </>
+      )}
 
       {/* Terrain outline - dim thin line so pads stand out */}
       <path
@@ -115,6 +163,15 @@ const Terrain: Component<TerrainProps> = (props) => {
           const padWidth = () => pad.x2 - pad.x1;
           const padHeight = 3; // Height of hatched rectangle
 
+          // Floating pad wave animation (Earth only)
+          const waveOffset = () => {
+            if (!pad.isFloating) return 0;
+            const time = props.time || 0;
+            return Math.sin(time * 0.5 + (pad.wavePhase || 0)) * 3;
+          };
+
+          const padY = () => pad.y + waveOffset();
+
           return (
             <g
               class="landing-pad"
@@ -127,7 +184,7 @@ const Terrain: Component<TerrainProps> = (props) => {
               {/* Hatched rectangle pad - solid outline with diagonal lines inside */}
               <rect
                 x={pad.x1}
-                y={pad.y - padHeight}
+                y={padY() - padHeight}
                 width={padWidth()}
                 height={padHeight}
                 fill="none"
@@ -151,7 +208,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                   <clipPath id={`pad-clip-${index()}`}>
                     <rect
                       x={pad.x1}
-                      y={pad.y - padHeight}
+                      y={padY() - padHeight}
                       width={padWidth()}
                       height={padHeight}
                     />
@@ -162,9 +219,9 @@ const Terrain: Component<TerrainProps> = (props) => {
                   (_, i) => (
                     <line
                       x1={pad.x1 + i * 6 - padHeight}
-                      y1={pad.y}
+                      y1={padY()}
                       x2={pad.x1 + i * 6}
-                      y2={pad.y - padHeight}
+                      y2={padY() - padHeight}
                       stroke={padColor()}
                       stroke-width="1"
                       opacity="0.7"
@@ -176,9 +233,9 @@ const Terrain: Component<TerrainProps> = (props) => {
               {/* Brightened top edge for depth */}
               <line
                 x1={pad.x1}
-                y1={pad.y - padHeight}
+                y1={padY() - padHeight}
                 x2={pad.x2}
-                y2={pad.y - padHeight}
+                y2={padY() - padHeight}
                 stroke="white"
                 stroke-width="1"
                 opacity="0.5"
@@ -188,9 +245,9 @@ const Terrain: Component<TerrainProps> = (props) => {
               {/* Side markers extending up */}
               <line
                 x1={pad.x1}
-                y1={pad.y - padHeight}
+                y1={padY() - padHeight}
                 x2={pad.x1}
-                y2={pad.y - 12}
+                y2={padY() - 12}
                 stroke={padColor()}
                 stroke-width={isLocked() ? "3" : "2"}
                 filter={
@@ -206,9 +263,9 @@ const Terrain: Component<TerrainProps> = (props) => {
               />
               <line
                 x1={pad.x2}
-                y1={pad.y - padHeight}
+                y1={padY() - padHeight}
                 x2={pad.x2}
-                y2={pad.y - 12}
+                y2={padY() - 12}
                 stroke={padColor()}
                 stroke-width={isLocked() ? "3" : "2"}
                 filter={
@@ -226,9 +283,9 @@ const Terrain: Component<TerrainProps> = (props) => {
               {/* Center marker */}
               <line
                 x1={padCenter()}
-                y1={pad.y - 15}
+                y1={padY() - 15}
                 x2={padCenter()}
-                y2={pad.y - 8}
+                y2={padY() - 8}
                 stroke={padColor()}
                 stroke-width={isLocked() ? "3" : "2"}
                 filter={
@@ -246,7 +303,7 @@ const Terrain: Component<TerrainProps> = (props) => {
               {/* Multiplier label - show "OCCUPIED" for occupied pads */}
               <text
                 x={padCenter()}
-                y={pad.y - 22}
+                y={padY() - 22}
                 text-anchor="middle"
                 fill={pad.occupied ? "#ff6644" : padColor()}
                 font-size="12"
@@ -256,11 +313,58 @@ const Terrain: Component<TerrainProps> = (props) => {
                 {pad.occupied ? "OCCUPIED" : `${pad.multiplier}x`}
               </text>
 
+              {/* Floating pad pontoons (Earth only) */}
+              {pad.isFloating && (
+                <>
+                  {/* Left pontoon */}
+                  <rect
+                    x={pad.x1 + 5}
+                    y={padY() + 3}
+                    width="12"
+                    height="6"
+                    rx="2"
+                    fill="none"
+                    stroke={padColor()}
+                    stroke-width="1"
+                    opacity="0.6"
+                  />
+                  {/* Right pontoon */}
+                  <rect
+                    x={pad.x2 - 17}
+                    y={padY() + 3}
+                    width="12"
+                    height="6"
+                    rx="2"
+                    fill="none"
+                    stroke={padColor()}
+                    stroke-width="1"
+                    opacity="0.6"
+                  />
+                  {/* Support struts */}
+                  <line
+                    x1={pad.x1 + 11}
+                    y1={padY()}
+                    x2={pad.x1 + 11}
+                    y2={padY() + 3}
+                    stroke={padColor()}
+                    stroke-width="1"
+                  />
+                  <line
+                    x1={pad.x2 - 11}
+                    y1={padY()}
+                    x2={pad.x2 - 11}
+                    y2={padY() + 3}
+                    stroke={padColor()}
+                    stroke-width="1"
+                  />
+                </>
+              )}
+
               {/* Rocket on occupied pads - sitting on the pad surface (hide if destroyed) */}
               {pad.occupied && props.destroyedPadIndex !== index() && (
                 <g
                   class="parked-rocket"
-                  transform={`translate(${padCenter()}, ${pad.y - 11})`}
+                  transform={`translate(${padCenter()}, ${padY() - 11})`}
                 >
                   {/* Rocket body - simple vector style */}
                   <path
@@ -315,7 +419,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                 <>
                   <line
                     x1={pad.x1}
-                    y1={pad.y - 12}
+                    y1={padY() - 12}
                     x2={pad.x1}
                     y2={0}
                     stroke={padColor()}
@@ -328,7 +432,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                   />
                   <line
                     x1={pad.x2}
-                    y1={pad.y - 12}
+                    y1={padY() - 12}
                     x2={pad.x2}
                     y2={0}
                     stroke={padColor()}
@@ -342,7 +446,7 @@ const Terrain: Component<TerrainProps> = (props) => {
                   {/* Center guide line */}
                   <line
                     x1={padCenter()}
-                    y1={pad.y - 22}
+                    y1={padY() - 22}
                     x2={padCenter()}
                     y2={0}
                     stroke={padColor()}

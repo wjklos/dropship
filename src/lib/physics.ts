@@ -9,7 +9,7 @@ import type {
   LandingOutcome,
   WindEffect,
 } from "./types";
-import type { AtmosphereConfig } from "./worlds";
+import type { AtmosphereConfig } from "./worldRegistry";
 import { getWindEffectAt } from "./atmosphere";
 
 /**

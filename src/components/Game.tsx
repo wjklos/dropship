@@ -5,6 +5,7 @@ import {
   createEffect,
   createSignal,
   For,
+  Show,
 } from "solid-js";
 import { createGameStore } from "../stores/game";
 import { updatePhysics, checkTerrainCollision } from "../lib/physics";
@@ -12,10 +13,9 @@ import {
   computeAutopilot,
   computeStabilizeOnly,
   selectTargetPad,
-  computeAbortManeuver,
   computeGNCAutopilot,
 } from "../lib/autopilot";
-import { WORLDS } from "../lib/worlds";
+import { WORLDS } from "../lib/worldRegistry";
 import Lander from "./Lander";
 import Terrain from "./Terrain";
 import HUD from "./HUD";
@@ -26,6 +26,11 @@ import PadTelemetry from "./PadTelemetry";
 import AtmosphericEffects from "./AtmosphericEffects";
 import WindBands from "./WindBands";
 import WindParticles from "./WindParticles";
+import ScoreBreakdown from "./ScoreBreakdown";
+import HighScoreEntry from "./HighScoreEntry";
+import HighScoreTable from "./HighScoreTable";
+import GameOver from "./GameOver";
+import EarthSky from "./EarthSky";
 
 const PHYSICS_TIMESTEP = 1 / 60; // 60 Hz physics
 
@@ -65,6 +70,16 @@ const Game: Component = () => {
         "--world-pad-unviable",
         world.colors.padUnviable,
       );
+      // Earth-specific water colors
+      if (world.colors.water) {
+        container.style.setProperty("--world-water", world.colors.water);
+      }
+      if (world.colors.waterStroke) {
+        container.style.setProperty(
+          "--world-water-stroke",
+          world.colors.waterStroke,
+        );
+      }
       // Note: --vector-primary and --vector-secondary stay as fixed green
       // for consistent UI elements (dialogs, HUD). World-specific theming
       // uses --world-primary and --world-secondary instead.
@@ -112,27 +127,11 @@ const Game: Component = () => {
     let thrustInput = 0;
     let rotationInput = 0;
 
-    // Handle abort phase - autopilot takes over for return to orbit
-    if (phase === "abort") {
-      const command = computeAbortManeuver(
-        lander,
-        config,
-        world.orbitalAltitude,
-      );
-      thrustInput = command.thrust;
-      rotationInput = command.rotation;
+    // Check if controls are locked (e.g., during GNC abort)
+    const controlsLocked = store.controlsLocked();
 
-      // Check if abort complete (back at orbital altitude with low descent rate)
-      if (
-        store.altitude() > world.orbitalAltitude - 100 &&
-        lander.velocity.y < 5 &&
-        lander.velocity.y > -5
-      ) {
-        store.completeAbort();
-      }
-    }
-    // Handle autopilot modes
-    else if (autopilot !== "off") {
+    // Handle autopilot modes (including abort phases which are handled by GNC)
+    if (autopilot !== "off" || controlsLocked) {
       // Get the target pad from store (already selected/randomized in updateViabilities)
       const pads = store.landingPads();
       const selectedIdx = store.selectedPadIndex();
@@ -142,13 +141,14 @@ const Game: Component = () => {
         viable: true,
       };
 
-      if (autopilot === "stabilize") {
+      if (autopilot === "stabilize" && !controlsLocked) {
         // Stabilize mode - just attitude control, manual thrust
+        // (abort overrides stabilize mode)
         const command = computeStabilizeOnly(lander);
         thrustInput = input.thrust ? 1 : 0;
         rotationInput = command.rotation;
       } else {
-        // Land/Demo mode - use GNC autopilot with computed burns
+        // Land/Demo mode or abort - use GNC autopilot with computed burns
         let gncState = store.gncState();
 
         // Update target pad in GNC state if not locked
@@ -158,6 +158,14 @@ const Game: Component = () => {
           gncState.targetPadIndex !== targetPadInfo.index
         ) {
           gncState = { ...gncState, targetPadIndex: targetPadInfo.index };
+        }
+
+        // Debug: Check config before GNC call
+        if (gncState.phase.startsWith("abort") || gncState.phase === "abort_assess") {
+          console.log("[Game] Config passed to GNC:", {
+            orbitalAltitude: config.orbitalAltitude,
+            worldId: config.worldId,
+          });
         }
 
         const { command, newState } = computeGNCAutopilot(
@@ -173,6 +181,40 @@ const Game: Component = () => {
 
         // Update GNC state
         store.setGNCState(newState);
+
+        // Check if orbit stabilized during reorient - disable gravity so lander floats while rotating
+        if (newState.orbitStabilized && lander.hasBurned) {
+          console.log("[Game] Orbit stabilized - disabling gravity for reorient at current altitude", {
+            position: { x: lander.position.x, y: lander.position.y },
+            altitude: store.altitude(),
+          });
+          store.setLander({
+            ...lander,
+            // Keep current position - we're already at proper altitude (checked at abort initiation)
+            hasBurned: false, // Re-enable gravity gating (no gravity in orbit)
+            velocity: { x: config.orbitalVelocity, y: 0 }, // Lock to orbital velocity, no vertical
+            thrust: 0, // Ensure no thrust
+          });
+          // Skip physics this frame - we just locked the orbital state
+          return;
+        }
+
+        // Check if abort_to_orbit completed (returned to orbit_wait)
+        // The GNC state machine resets to orbit_wait when orbit is achieved
+        if (
+          gncState.phase.startsWith("abort_") &&
+          newState.phase === "orbit_wait"
+        ) {
+          console.log("[Game] Abort to orbit completed! Calling completeAbort()", {
+            oldPhase: gncState.phase,
+            newPhase: newState.phase,
+          });
+          // Abort complete - reset game state to orbit
+          // IMPORTANT: Return early to prevent updatePhysics from overwriting
+          // the reset lander state with physics from the old (falling) state
+          store.completeAbort();
+          return;
+        }
 
         thrustInput = command.thrust;
         rotationInput = command.rotation;
@@ -234,16 +276,32 @@ const Game: Component = () => {
         });
         store.setGamePhase("landed");
         store.setLandedPadIndex(collision.landedPadIndex);
-        // Finalize flight log
-        store.finalizeFlightLog("success", null, collision.landedPadIndex);
 
-        if (isDemo) {
-          store.recordDemoResult(true, null);
-          setTimeout(() => store.reset(true), 2000);
-        } else if (store.autopilotMode() === "off") {
-          // Manual mode - record human result
-          store.recordHumanResult(true, null);
-        }
+        // Record abort outcome if we were in an abort sequence
+        store.recordAbortOutcome("landed_success");
+
+        // Finalize flight log and get backend score
+        store
+          .finalizeFlightLog("success", null, collision.landedPadIndex)
+          .then((backendScore) => {
+            if (isDemo) {
+              store.recordDemoResult(true, null, backendScore);
+              setTimeout(() => store.reset(true), 2000);
+            } else if (store.isArcadeMode()) {
+              // Arcade mode - record result with backend score
+              const landedPad = store.landingPads()[collision.landedPadIndex!];
+              store.recordArcadeResult(
+                "success",
+                landedPad,
+                newLander,
+                null,
+                backendScore,
+              );
+            } else if (store.autopilotMode() === "off") {
+              // Manual mode - record human result
+              store.recordHumanResult(true, null);
+            }
+          });
       } else if (collision.outcome === "damaged") {
         // Damaged landing - survived but not on pad
         store.setLander({
@@ -261,16 +319,25 @@ const Game: Component = () => {
           },
         });
         store.setGamePhase("landed");
-        // Finalize flight log
-        store.finalizeFlightLog("damaged", collision.failureReason, null);
 
-        if (isDemo) {
-          store.recordDemoResult(false, collision.failureReason);
-          setTimeout(() => store.reset(true), 2000);
-        } else if (store.autopilotMode() === "off") {
-          // Manual mode - record human result
-          store.recordHumanResult(false, collision.failureReason);
-        }
+        // Record abort outcome if we were in an abort sequence
+        store.recordAbortOutcome("landed_damaged");
+
+        // Finalize flight log (no score needed for damaged)
+        store
+          .finalizeFlightLog("damaged", collision.failureReason, null)
+          .then(() => {
+            if (isDemo) {
+              store.recordDemoResult(false, collision.failureReason);
+              setTimeout(() => store.reset(true), 2000);
+            } else if (store.isArcadeMode()) {
+              // Arcade mode - damaged = no life lost, no score
+              store.recordArcadeResult("damaged", null, newLander);
+            } else if (store.autopilotMode() === "off") {
+              // Manual mode - record human result
+              store.recordHumanResult(false, collision.failureReason);
+            }
+          });
       } else {
         // Crash!
         store.setLander({
@@ -283,16 +350,25 @@ const Game: Component = () => {
         store.setGamePhase("crashed");
         // Track if we crashed into an occupied pad (for rocket explosion)
         setCrashedPadIndex(collision.crashedPadIndex);
-        // Finalize flight log
-        store.finalizeFlightLog("crashed", collision.failureReason, null);
 
-        if (isDemo) {
-          store.recordDemoResult(false, collision.failureReason);
-          setTimeout(() => store.reset(true), 2000);
-        } else if (store.autopilotMode() === "off") {
-          // Manual mode - record human result
-          store.recordHumanResult(false, collision.failureReason);
-        }
+        // Record abort outcome if we were in an abort sequence
+        store.recordAbortOutcome("crashed");
+
+        // Finalize flight log (no score needed for crashed)
+        store
+          .finalizeFlightLog("crashed", collision.failureReason, null)
+          .then(() => {
+            if (isDemo) {
+              store.recordDemoResult(false, collision.failureReason);
+              setTimeout(() => store.reset(true), 2000);
+            } else if (store.isArcadeMode()) {
+              // Arcade mode - crash = lose a life
+              store.recordArcadeResult("crashed", null, newLander);
+            } else if (store.autopilotMode() === "off") {
+              // Manual mode - record human result
+              store.recordHumanResult(false, collision.failureReason);
+            }
+          });
       }
       store.setGameOver(true);
     } else {
@@ -302,6 +378,29 @@ const Game: Component = () => {
 
   // Keyboard handlers
   const handleKeyDown = (e: KeyboardEvent) => {
+    const phase = store.gamePhase();
+
+    // Route to high score entry handler
+    if (phase === "high_score_entry") {
+      e.preventDefault();
+      store.handleHighScoreEntryKeyDown(e.key);
+      return;
+    }
+
+    // Route to high score table handler
+    if (phase === "high_score_table") {
+      e.preventDefault();
+      store.handleHighScoreTableKeyDown(e.key);
+      return;
+    }
+
+    // Handle arcade mode start key
+    if (e.key === "9" && !store.isArcadeMode() && phase === "orbit") {
+      e.preventDefault();
+      store.startArcadeSession();
+      return;
+    }
+
     // Prevent default for game keys
     if (
       [
@@ -328,6 +427,8 @@ const Game: Component = () => {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
     animationFrameId = requestAnimationFrame(gameLoop);
+    // Start idle timer for high score display
+    store.resetIdleTimer();
   });
 
   onCleanup(() => {
@@ -441,19 +542,30 @@ const Game: Component = () => {
           </pattern>
         </defs>
 
-        {/* Stars */}
-        <g class="stars">
-          <For each={store.stars()}>
-            {(star) => (
-              <circle
-                cx={star.x}
-                cy={star.y}
-                r={star.size}
-                fill={`rgba(200, 255, 200, ${star.brightness * 0.7})`}
-              />
-            )}
-          </For>
-        </g>
+        {/* Earth Sky - dawn gradient with sun */}
+        {store.worldId() === "earth" && (
+          <EarthSky
+            width={store.config().width}
+            height={store.config().height}
+            stars={store.stars()}
+          />
+        )}
+
+        {/* Stars (for non-Earth worlds) */}
+        {store.worldId() !== "earth" && (
+          <g class="stars">
+            <For each={store.stars()}>
+              {(star) => (
+                <circle
+                  cx={star.x}
+                  cy={star.y}
+                  r={star.size}
+                  fill={`rgba(200, 255, 200, ${star.brightness * 0.7})`}
+                />
+              )}
+            </For>
+          </g>
+        )}
 
         {/* Atmosphere gradient overlay (Mars has dusty atmosphere) */}
         {store.world().colors.atmosphere && (
@@ -546,6 +658,8 @@ const Game: Component = () => {
           width={store.config().width}
           height={store.config().height}
           destroyedPadIndex={crashedPadIndex()}
+          time={store.gameTime()}
+          worldId={store.worldId()}
         />
 
         {/* Trajectory Prediction Overlay */}
@@ -671,6 +785,60 @@ const Game: Component = () => {
         onSelectAutopilot={store.setAutopilotMode}
         regionName={store.regionName()}
         landedPadDesignation={store.landedPadDesignation()}
+        isArcadeMode={store.isArcadeMode()}
+        arcadeLives={store.arcadeLives()}
+        arcadeTotalScore={store.arcadeTotalScore()}
+        arcadeStreak={store.arcadeStreak()}
+        lifeLostAnimation={store.lifeLostAnimation()}
+        lifeGainedAnimation={store.lifeGainedAnimation()}
+        arcadeCountdown={store.arcadeCountdown()}
+        onStartArcade={store.startArcadeSession}
+      />
+
+      {/* Score Breakdown Overlay (arcade mode) */}
+      <ScoreBreakdown
+        breakdown={store.lastScoreBreakdown()}
+        visible={store.showScoreBreakdown()}
+        totalScore={store.arcadeTotalScore()}
+        streak={store.arcadeStreak()}
+      />
+
+      {/* Game Over Screen */}
+      <GameOver
+        visible={store.showGameOver()}
+        score={store.arcadeTotalScore()}
+        landings={store.arcadeLandingCount()}
+      />
+
+      {/* High Score Entry Screen */}
+      <HighScoreEntry
+        visible={store.showHighScoreEntry()}
+        rank={store.newHighScoreRank()}
+        score={store.arcadeTotalScore()}
+        initials={store.highScoreInitials()}
+        activeIndex={store.activeInitialIndex()}
+        onKeyDown={store.handleHighScoreEntryKeyDown}
+      />
+
+      {/* High Score Table */}
+      <HighScoreTable
+        visible={store.showHighScoreTable()}
+        entries={store.highScoreEntries()}
+        highlightedRank={store.highlightedHighScoreRank()}
+        finalScore={store.arcadeTotalScore()}
+        landings={store.arcadeLandingCount()}
+        isGameOver={store.isArcadeMode()}
+        onKeyDown={store.handleHighScoreTableKeyDown}
+      />
+
+      {/* Idle High Scores - shown after 3 minutes of inactivity */}
+      <HighScoreTable
+        visible={store.showIdleHighScores()}
+        entries={store.highScoreEntries()}
+        highlightedRank={null}
+        isGameOver={false}
+        isOverlay={true}
+        onKeyDown={() => {}}
       />
 
       {/* CRT Effect Overlay */}

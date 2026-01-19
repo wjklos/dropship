@@ -12,7 +12,15 @@ import type {
   FailureReason,
   FailureStats,
   LandingOutcome,
+  ScoreBreakdown,
+  ArcadeState,
 } from "../lib/types";
+import {
+  qualifiesForHighScore,
+  addHighScore,
+  getHighScoreTable,
+  type HighScoreEntry,
+} from "../lib/highScores";
 import { generateTerrain, generateStars } from "../lib/terrain";
 import { getAltitude, getSpeed } from "../lib/physics";
 import {
@@ -20,15 +28,19 @@ import {
   selectTargetPad,
   selectTargetPadWithCone,
   createGNCState,
+  triggerAbort,
+  canTriggerAbort,
+  areControlsLockedForAbort,
   type GNCState,
   type LandingConeResult,
 } from "../lib/autopilot";
 import {
   WORLDS,
   getWorld,
+  getAllWorlds,
   type WorldId,
   type WorldConfig,
-} from "../lib/worlds";
+} from "../lib/worldRegistry";
 import {
   getZoomLevel,
   calculateViewBox,
@@ -36,11 +48,20 @@ import {
 } from "../lib/zoom";
 import { getWindEffectAt } from "../lib/atmosphere";
 import {
+  submitFlight,
+  queueFlightForSubmission,
+  unlockWorld,
+  type FlightSubmission,
+} from "../lib/api";
+import { refreshProgression } from "../lib/worldRegistry";
+import {
   FlightLogger,
   saveFlightRecord,
   exportFlightRecords,
   getFlightStats,
   clearFlightRecords,
+  type AbortDecision,
+  type AbortOutcome,
 } from "../lib/flightLogger";
 import {
   predictTrajectory,
@@ -56,6 +77,10 @@ const WORLD_HEIGHT = 1200;
 
 // Create game configuration from world
 function createConfig(world: WorldConfig): GameConfig {
+  console.log("[Config] Creating config from world:", {
+    worldId: world.id,
+    worldOrbitalAltitude: world.orbitalAltitude,
+  });
   return {
     width: WORLD_WIDTH,
     height: WORLD_HEIGHT,
@@ -202,6 +227,104 @@ export function createGameStore() {
   const [lastFailureReason, setLastFailureReason] =
     createSignal<FailureReason>(null);
 
+  // ============================================
+  // ARCADE MODE STATE
+  // ============================================
+  const STARTING_LIVES = 3;
+  const MAX_LIVES = 5;
+  const LIFE_AWARD_INTERVAL = 5; // Award life every 5 successful landings
+
+  const [arcadeLives, setArcadeLives] = createSignal(STARTING_LIVES);
+  const [arcadeTotalScore, setArcadeTotalScore] = createSignal(0);
+  const [arcadeStreak, setArcadeStreak] = createSignal(0);
+  const [arcadeConsecutiveSuccesses, setArcadeConsecutiveSuccesses] =
+    createSignal(0); // For life awards
+  const [arcadeLandingCount, setArcadeLandingCount] = createSignal(0);
+  const [isArcadeMode, setIsArcadeMode] = createSignal(false);
+
+  // Score breakdown for display
+  const [lastScoreBreakdown, setLastScoreBreakdown] =
+    createSignal<ScoreBreakdown | null>(null);
+  const [showScoreBreakdown, setShowScoreBreakdown] = createSignal(false);
+
+  // Life animation triggers
+  const [lifeLostAnimation, setLifeLostAnimation] = createSignal(false);
+  const [lifeGainedAnimation, setLifeGainedAnimation] = createSignal(false);
+
+  // Game over screen state
+  const [showGameOver, setShowGameOver] = createSignal(false);
+
+  // Arcade countdown timer (for "Next level in X...")
+  const [arcadeCountdown, setArcadeCountdown] = createSignal<number | null>(
+    null,
+  );
+
+  // High score entry state
+  const [showHighScoreEntry, setShowHighScoreEntry] = createSignal(false);
+  const [newHighScoreRank, setNewHighScoreRank] = createSignal<number | null>(
+    null,
+  );
+  const [highScoreInitials, setHighScoreInitials] = createSignal([
+    "A",
+    "A",
+    "A",
+  ]);
+  const [activeInitialIndex, setActiveInitialIndex] = createSignal(0);
+
+  // High score table state
+  const [showHighScoreTable, setShowHighScoreTable] = createSignal(false);
+  const [highlightedHighScoreRank, setHighlightedHighScoreRank] = createSignal<
+    number | null
+  >(null);
+  const [highScoreEntries, setHighScoreEntries] =
+    createSignal<HighScoreEntry[]>(getHighScoreTable());
+
+  // Idle timer for showing high scores after inactivity
+  const IDLE_TIMEOUT = 3 * 60 * 1000; // 3 minutes
+  const IDLE_DISPLAY_DURATION = 15 * 1000; // 15 seconds
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let idleDisplayTimer: ReturnType<typeof setTimeout> | null = null;
+  const [showIdleHighScores, setShowIdleHighScores] = createSignal(false);
+
+  function resetIdleTimer() {
+    // Clear existing timers
+    if (idleTimer) clearTimeout(idleTimer);
+    if (idleDisplayTimer) clearTimeout(idleDisplayTimer);
+    setShowIdleHighScores(false);
+
+    // Don't start idle timer if in arcade mode or showing high score screens
+    if (isArcadeMode() || showHighScoreEntry() || showHighScoreTable()) return;
+
+    // Start new idle timer
+    idleTimer = setTimeout(() => {
+      // Only show if game is idle - must be in orbit phase, not in arcade mode,
+      // and not showing other screens
+      const phase = gamePhase();
+      if (
+        phase !== "orbit" ||
+        isArcadeMode() ||
+        showHighScoreEntry() ||
+        showHighScoreTable() ||
+        autopilotMode() === "demo"
+      ) {
+        // Not idle, restart timer
+        resetIdleTimer();
+        return;
+      }
+
+      // Show high scores after idle timeout
+      setHighScoreEntries(getHighScoreTable());
+      setShowIdleHighScores(true);
+
+      // Hide after display duration
+      idleDisplayTimer = setTimeout(() => {
+        setShowIdleHighScores(false);
+        // Restart the idle timer
+        resetIdleTimer();
+      }, IDLE_DISPLAY_DURATION);
+    }, IDLE_TIMEOUT);
+  }
+
   // Flight logger - tracks current flight for analysis
   let flightLogger: FlightLogger | null = null;
 
@@ -243,12 +366,12 @@ export function createGameStore() {
     }
   }
 
-  // Finalize and save flight log
-  function finalizeFlightLog(
+  // Finalize and save flight log, returns backend score
+  async function finalizeFlightLog(
     outcome: LandingOutcome | null,
     failureReason: FailureReason,
     landedPadIndex: number | null,
-  ) {
+  ): Promise<number | null> {
     if (flightLogger) {
       const record = flightLogger.finalize(
         lander(),
@@ -257,8 +380,110 @@ export function createGameStore() {
         failureReason,
         landedPadIndex,
       );
+      // Save locally
       saveFlightRecord(record);
+
+      // Submit to backend API
+      const submission: FlightSubmission = {
+        id: record.id,
+        timestamp: record.timestamp,
+        worldId: record.worldId,
+        outcome: record.outcome,
+        failureReason: record.failureReason,
+        mode: record.mode,
+        approachMode: record.approachMode,
+        duration: record.duration,
+        burnTime: record.burnTime,
+        initial: {
+          x: record.initial.x,
+          y: record.initial.y,
+          vx: record.initial.vx,
+          vy: record.initial.vy,
+          rotation: record.initial.rotation,
+          fuel: record.initial.fuel,
+          targetPadIndex: record.initial.targetPadIndex,
+        },
+        terminal: record.terminal,
+        metrics: {
+          maxSpeed: record.metrics.maxSpeed,
+          maxDescentRate: record.metrics.maxDescentRate,
+          maxHorizontalSpeed: record.metrics.maxHorizontalSpeed,
+          maxGs: record.metrics.maxGs,
+          minAltitude: record.metrics.minAltitude,
+          fuelUsed: record.metrics.fuelUsed,
+          horizontalErrorAtTouchdown: record.metrics.horizontalErrorAtTouchdown,
+          verticalSpeedAtTouchdown: record.metrics.verticalSpeedAtTouchdown,
+          horizontalSpeedAtTouchdown: record.metrics.horizontalSpeedAtTouchdown,
+          angleAtTouchdown: record.metrics.angleAtTouchdown,
+          timeInOrbit: record.metrics.timeInOrbit,
+          abortAttempts: record.metrics.abortAttempts,
+          // Include detailed abort events (filter out 'pending' outcome for clean submission)
+          abortEvents: record.metrics.abortEvents
+            .filter((e) => e.outcome !== "pending")
+            .map((e) => ({
+              altitude: e.altitude,
+              phase: e.phase,
+              fuel: e.fuel,
+              velocity: e.velocity,
+              decision: e.decision,
+              outcome: e.outcome,
+              originalPadIndex: e.originalPadIndex,
+              emergencyPadIndex: e.emergencyPadIndex,
+              timestamp: e.timestamp,
+            })),
+        },
+        landedPadIndex: record.landedPadIndex,
+        landedPadMultiplier:
+          landedPadIndex !== null
+            ? landingPads()[landedPadIndex]?.multiplier
+            : undefined,
+        // Include telemetry (required by backend)
+        telemetry: record.telemetry,
+      };
+
       flightLogger = null;
+
+      // Submit and return backend score
+      const result = await submitFlight(submission);
+      if (result) {
+        // On successful landing, attempt to unlock the next world
+        if (outcome === "success") {
+          attemptWorldUnlock(record.worldId);
+        }
+        return result.score ?? null;
+      } else {
+        // Queue for later if submission failed
+        queueFlightForSubmission(submission);
+        return null;
+      }
+    }
+    return null;
+  }
+
+  // World unlock progression chain
+  const WORLD_UNLOCK_CHAIN: Record<string, string> = {
+    moon: "mars",
+    mars: "earth",
+    // earth: future worlds...
+  };
+
+  // Attempt to unlock the next world after a successful landing
+  async function attemptWorldUnlock(landedWorldId: string): Promise<void> {
+    const nextWorld = WORLD_UNLOCK_CHAIN[landedWorldId];
+    if (!nextWorld) {
+      console.log(`[Unlock] No next world to unlock after ${landedWorldId}`);
+      return;
+    }
+
+    console.log(`[Unlock] Attempting to unlock ${nextWorld} after landing on ${landedWorldId}`);
+
+    const result = await unlockWorld(nextWorld);
+    if (result && result.success !== false) {
+      console.log(`[Unlock] Successfully unlocked ${nextWorld}:`, result);
+      // Refresh progression to update UI
+      await refreshProgression();
+    } else {
+      console.log(`[Unlock] Could not unlock ${nextWorld} (may already be unlocked or requirements not met)`);
     }
   }
 
@@ -412,9 +637,13 @@ export function createGameStore() {
   // Check if abort is available
   const canAbort = createMemo(() => {
     const phase = gamePhase();
-    const alt = altitude();
-    return phase === "descent" && canAbortAtAltitude(alt);
+    // Abort available during descent (before landing/crash)
+    // The GNC system handles abort phases and decision making
+    return phase === "descent" && canTriggerAbort(gncState(), lander());
   });
+
+  // Check if controls are locked for abort
+  const controlsLocked = createMemo(() => areControlsLockedForAbort(gncState()));
 
   // Current zoom level
   const currentZoom = createMemo(() => getZoomLevel(altitude()));
@@ -575,30 +804,250 @@ export function createGameStore() {
     }
   }
 
-  // Initiate abort - return to orbit
+  // Initiate abort - triggers GNC abort system
   function initiateAbort() {
     if (!canAbort()) {
+      console.log("[Abort] Cannot abort - canAbort() returned false");
       return;
     }
-    setGamePhase("abort");
-    recordAbortInLog();
+
+    // Use the new GNC abort system
+    const currentGNCState = gncState();
+    const currentLander = lander();
+    const pads = landingPads();
+    const cfg = config();
+    const terr = terrain();
+    const currentGameTime = gameTime();
+    const currentAltitude = altitude();
+
+    // IMPORTANT: Capture state BEFORE triggerAbort modifies it
+    const phaseBeforeAbort = currentGNCState.phase;
+    const originalPadIdx = currentGNCState.targetPadLocked
+      ? currentGNCState.targetPadIndex
+      : null;
+
+    console.log("[Abort] Initiating abort:", {
+      phase: phaseBeforeAbort,
+      altitude: currentAltitude,
+      fuel: currentLander.fuel,
+      vx: currentLander.velocity.x,
+      vy: currentLander.velocity.y,
+      hasFlightLogger: !!flightLogger,
+    });
+
+    // Trigger abort through GNC
+    const abortTriggered = triggerAbort(
+      currentGNCState,
+      currentLander,
+      pads,
+      cfg,
+      terr,
+    );
+
+    console.log("[Abort] triggerAbort returned:", abortTriggered, {
+      newPhase: currentGNCState.phase,
+      decision: currentGNCState.abortDecision,
+      emergencyPad: currentGNCState.emergencyPadIndex,
+    });
+
+    if (abortTriggered) {
+      // Update GNC state with abort changes
+      setGNCState({ ...currentGNCState });
+
+      // Record detailed abort event in flight log
+      if (flightLogger) {
+        // Map GNC abort decision to logger's AbortDecision type
+        const decision: AbortDecision =
+          currentGNCState.abortDecision === "orbit"
+            ? "orbit"
+            : currentGNCState.abortDecision === "retarget"
+              ? "retarget"
+              : "brace";
+
+        console.log("[Abort] Recording abort event:", {
+          altitude: currentAltitude,
+          phase: phaseBeforeAbort, // Use phase BEFORE abort
+          fuel: currentLander.fuel,
+          decision,
+          originalPadIdx,
+          emergencyPadIndex: currentGNCState.emergencyPadIndex,
+          timestamp: currentGameTime,
+        });
+
+        flightLogger.startAbortEvent(
+          currentAltitude,
+          phaseBeforeAbort, // Use phase BEFORE abort was triggered
+          currentLander.fuel,
+          {
+            vx: currentLander.velocity.x,
+            vy: currentLander.velocity.y,
+          },
+          decision,
+          originalPadIdx,
+          currentGNCState.emergencyPadIndex,
+          currentGameTime,
+        );
+      } else {
+        console.warn("[Abort] No flight logger - abort event not recorded!");
+      }
+    }
   }
 
-  // Complete abort - back in orbit
+  // Complete abort - called when GNC abort returns to orbit
+  // This is now handled automatically by the GNC state machine
   function completeAbort() {
     const l = lander();
     const currentWorld = world();
 
-    // Reset to orbital state
+    console.log("[Abort] completeAbort CALLED - returning to orbit", {
+      hasFlightLogger: !!flightLogger,
+      currentPosition: { x: l.position.x, y: l.position.y },
+      currentVelocity: { vx: l.velocity.x, vy: l.velocity.y },
+      currentRotation: l.rotation,
+      newVelocity: { vx: currentWorld.orbitalVelocity, vy: 0 },
+      newRotation: -Math.PI / 2,
+    });
+
+    // Record successful orbit return in flight log and SUBMIT IT
+    // This is critical - abort events must be submitted before the logger is reset
+    if (flightLogger) {
+      const hasPending = flightLogger.hasPendingAbort();
+      console.log("[Abort] Flight logger exists, hasPendingAbort:", hasPending);
+
+      if (hasPending) {
+        flightLogger.completeAbortEvent("orbit_achieved");
+        console.log("[Abort] Marked abort event as orbit_achieved");
+      }
+
+      // Submit the aborted flight to backend (outcome=null means aborted/no landing)
+      // This ensures abort events are recorded even when returning to orbit
+      const record = flightLogger.finalize(
+        l,
+        altitude(),
+        null, // No landing outcome - returned to orbit
+        null, // No failure reason
+        null, // No landed pad
+      );
+
+      // Save locally
+      saveFlightRecord(record);
+
+      // Submit to backend with abort events
+      const submission: FlightSubmission = {
+        id: record.id,
+        timestamp: record.timestamp,
+        worldId: record.worldId,
+        outcome: null, // Aborted - returned to orbit
+        failureReason: null,
+        mode: record.mode,
+        approachMode: record.approachMode,
+        duration: record.duration,
+        burnTime: record.burnTime,
+        initial: {
+          x: record.initial.x,
+          y: record.initial.y,
+          vx: record.initial.vx,
+          vy: record.initial.vy,
+          rotation: record.initial.rotation,
+          fuel: record.initial.fuel,
+          targetPadIndex: record.initial.targetPadIndex,
+        },
+        terminal: record.terminal,
+        metrics: {
+          maxSpeed: record.metrics.maxSpeed,
+          maxDescentRate: record.metrics.maxDescentRate,
+          maxHorizontalSpeed: record.metrics.maxHorizontalSpeed,
+          maxGs: record.metrics.maxGs,
+          minAltitude: record.metrics.minAltitude,
+          fuelUsed: record.metrics.fuelUsed,
+          horizontalErrorAtTouchdown: record.metrics.horizontalErrorAtTouchdown,
+          verticalSpeedAtTouchdown: record.metrics.verticalSpeedAtTouchdown,
+          horizontalSpeedAtTouchdown: record.metrics.horizontalSpeedAtTouchdown,
+          angleAtTouchdown: record.metrics.angleAtTouchdown,
+          timeInOrbit: record.metrics.timeInOrbit,
+          abortAttempts: record.metrics.abortAttempts,
+          abortEvents: record.metrics.abortEvents
+            .filter((e) => e.outcome !== "pending")
+            .map((e) => ({
+              altitude: e.altitude,
+              phase: e.phase,
+              fuel: e.fuel,
+              velocity: e.velocity,
+              decision: e.decision,
+              outcome: e.outcome,
+              originalPadIndex: e.originalPadIndex,
+              emergencyPadIndex: e.emergencyPadIndex,
+              timestamp: e.timestamp,
+            })),
+        },
+        landedPadIndex: null,
+        telemetry: record.telemetry,
+      };
+
+      console.log("[Abort] Submitting flight with abort events:", {
+        flightId: submission.id,
+        outcome: submission.outcome,
+        abortAttempts: submission.metrics.abortAttempts,
+        abortEventsCount: submission.metrics.abortEvents?.length ?? 0,
+        abortEvents: submission.metrics.abortEvents,
+      });
+
+      // Submit async (don't block game)
+      submitFlight(submission).then((result) => {
+        if (!result) {
+          console.warn("[Abort] Flight submission failed, queuing for later");
+          queueFlightForSubmission(submission);
+        } else {
+          console.log("[Abort] Flight successfully submitted to backend:", result);
+        }
+      });
+
+      // Clear the logger so a fresh one is created on next descent
+      flightLogger = null;
+    }
+
+    // Reset lander to orbital state at current position
+    // The reorient phase has already rotated to retrograde stance (-π/2)
+    // Position is kept - canReachOrbit() already verified we're at proper altitude
     setLander({
       ...l,
+      // Keep current position - already at proper altitude (verified at abort initiation)
       hasBurned: false,
       velocity: {
         x: currentWorld.orbitalVelocity,
         y: 0,
       },
+      // Keep current rotation - reorient phase already aligned to retrograde
+      angularVelocity: 0,
     });
     setGamePhase("orbit");
+
+    // Reset target lock so player can select a new pad
+    setTargetLocked(false);
+
+    // Turn OFF autopilot - player is back in control
+    setAutopilotMode("off");
+
+    // Reset GNC state for fresh start
+    setGNCState(createGNCState());
+
+    // Verify the state was set correctly
+    const finalLander = lander();
+    console.log("[Abort] Returned to orbit - autopilot OFF, player in control", {
+      finalPosition: { x: finalLander.position.x, y: finalLander.position.y },
+      finalVelocity: { vx: finalLander.velocity.x, vy: finalLander.velocity.y },
+      finalRotation: finalLander.rotation,
+      finalHasBurned: finalLander.hasBurned,
+      gamePhase: gamePhase(),
+      autopilotMode: autopilotMode(),
+    });
+  }
+
+  // Record abort outcome for non-orbit cases (landed or crashed after abort)
+  function recordAbortOutcome(outcome: AbortOutcome) {
+    if (flightLogger && flightLogger.hasPendingAbort()) {
+      flightLogger.completeAbortEvent(outcome);
+    }
   }
 
   // Transition from orbit to descent (called when first thrust happens)
@@ -609,16 +1058,21 @@ export function createGameStore() {
   }
 
   // Record demo result
-  function recordDemoResult(success: boolean, reason: FailureReason = null) {
+  function recordDemoResult(
+    success: boolean,
+    reason: FailureReason = null,
+    backendScore: number | null = null,
+  ) {
     setDemoAttempts((a) => a + 1);
     setLastFailureReason(reason);
 
     if (success) {
       setDemoSuccesses((s) => s + 1);
-      // Increment streak and calculate score
+      // Increment streak
       const newStreak = demoStreak() + 1;
       setDemoStreak(newStreak);
-      const points = 100 * newStreak;
+      // Use backend score if available, otherwise fall back to streak-based
+      const points = backendScore ?? 100 * newStreak;
       setDemoScore((s) => s + points);
     } else if (reason === "DAMAGED") {
       setDemoDamaged((d) => d + 1);
@@ -684,8 +1138,377 @@ export function createGameStore() {
     setHumanStreak(0);
   }
 
+  // ============================================
+  // ARCADE MODE FUNCTIONS
+  // ============================================
+
+  /**
+   * Calculate landing score based on multiple factors
+   */
+  function calculateLandingScore(
+    pad: LandingPad,
+    landerState: LanderState,
+    currentStreak: number,
+    currentWorldId: WorldId,
+  ): ScoreBreakdown {
+    const BASE_SCORE = 1000;
+
+    // Pad difficulty multiplier (1-5)
+    const padMultiplier = pad.multiplier;
+
+    // Fuel multiplier (1.0-2.0 based on remaining fuel)
+    const fuelPercent = landerState.fuel;
+    let fuelMultiplier = 1.0;
+    if (fuelPercent >= 80) fuelMultiplier = 2.0;
+    else if (fuelPercent >= 60) fuelMultiplier = 1.7;
+    else if (fuelPercent >= 40) fuelMultiplier = 1.4;
+    else if (fuelPercent >= 20) fuelMultiplier = 1.2;
+
+    // Precision multiplier (1.0-1.5 based on distance from pad center)
+    const padCenter = (pad.x1 + pad.x2) / 2;
+    const padRadius = (pad.x2 - pad.x1) / 2;
+    const distFromCenter = Math.abs(landerState.position.x - padCenter);
+    const precisionMultiplier = Math.max(
+      1.0,
+      1.5 - (distFromCenter / padRadius) * 0.5,
+    );
+
+    // Speed multiplier (1.0-1.3 based on landing velocity)
+    const speed = Math.abs(landerState.velocity.y);
+    const maxSafeSpeed = 15; // config.maxLandingVelocity
+    const speedMultiplier = Math.max(1.0, 1.3 - (speed / maxSafeSpeed) * 0.3);
+
+    // Streak bonus (+500 per consecutive success)
+    const streakBonus = 500 * currentStreak;
+
+    // World multiplier (Mars is harder = 1.5x bonus)
+    const worldMultiplier = currentWorldId === "mars" ? 1.5 : 1.0;
+
+    // Calculate total
+    const subtotal =
+      BASE_SCORE *
+        padMultiplier *
+        fuelMultiplier *
+        precisionMultiplier *
+        speedMultiplier +
+      streakBonus;
+    const totalScore = Math.round(subtotal * worldMultiplier);
+
+    return {
+      baseScore: BASE_SCORE,
+      padMultiplier,
+      fuelMultiplier: Math.round(fuelMultiplier * 100) / 100,
+      precisionMultiplier: Math.round(precisionMultiplier * 100) / 100,
+      speedMultiplier: Math.round(speedMultiplier * 100) / 100,
+      streakBonus,
+      worldMultiplier,
+      totalScore,
+    };
+  }
+
+  /**
+   * Start a new arcade session
+   */
+  function startArcadeSession() {
+    setIsArcadeMode(true);
+    setArcadeLives(STARTING_LIVES);
+    setArcadeTotalScore(0);
+    setArcadeStreak(0);
+    setArcadeConsecutiveSuccesses(0);
+    setArcadeLandingCount(0);
+    setLastScoreBreakdown(null);
+    setShowScoreBreakdown(false);
+    setShowHighScoreEntry(false);
+    setShowHighScoreTable(false);
+    setHighScoreInitials(["A", "A", "A"]);
+    setActiveInitialIndex(0);
+    reset(false);
+  }
+
+  /**
+   * End arcade session and check for high score
+   */
+  function endArcadeSession() {
+    const finalScore = arcadeTotalScore();
+    const qualification = qualifiesForHighScore(finalScore);
+
+    setGamePhase("game_over");
+
+    if (qualification.qualifies) {
+      setNewHighScoreRank(qualification.rank);
+      setShowHighScoreEntry(true);
+      setGamePhase("high_score_entry");
+    } else {
+      setShowHighScoreTable(true);
+      setHighScoreEntries(getHighScoreTable());
+      setGamePhase("high_score_table");
+    }
+  }
+
+  /**
+   * Start countdown timer for arcade mode
+   */
+  function startArcadeCountdown(seconds: number, onComplete: () => void) {
+    setArcadeCountdown(seconds);
+
+    const interval = setInterval(() => {
+      setArcadeCountdown((c) => {
+        if (c === null || c <= 1) {
+          clearInterval(interval);
+          setArcadeCountdown(null);
+          onComplete();
+          return null;
+        }
+        return c - 1;
+      });
+    }, 1000);
+  }
+
+  /**
+   * Record arcade landing result
+   * @param backendScore - Score from backend API (if available)
+   */
+  function recordArcadeResult(
+    outcome: LandingOutcome,
+    pad: LandingPad | null,
+    landerState: LanderState,
+    failureReason: FailureReason = null,
+    backendScore: number | null = null,
+  ) {
+    // Always increment attempts for player stats
+    setHumanAttempts((a) => a + 1);
+
+    if (outcome === "success" && pad) {
+      // Update player stats
+      setHumanSuccesses((s) => s + 1);
+
+      // Calculate score - use backend score if available, otherwise calculate locally
+      const newStreak = arcadeStreak() + 1;
+      setArcadeStreak(newStreak);
+
+      const breakdown = calculateLandingScore(
+        pad,
+        landerState,
+        newStreak,
+        worldId(),
+      );
+
+      // Override with backend score if available
+      if (backendScore !== null) {
+        breakdown.totalScore = backendScore;
+      }
+
+      setLastScoreBreakdown(breakdown);
+      setArcadeTotalScore((s) => s + breakdown.totalScore);
+      setArcadeLandingCount((c) => c + 1);
+      setShowScoreBreakdown(true);
+
+      // Track consecutive successes for life awards
+      const newConsecutive = arcadeConsecutiveSuccesses() + 1;
+      setArcadeConsecutiveSuccesses(newConsecutive);
+
+      // Award life every LIFE_AWARD_INTERVAL successes
+      if (
+        newConsecutive % LIFE_AWARD_INTERVAL === 0 &&
+        arcadeLives() < MAX_LIVES
+      ) {
+        awardLife();
+      }
+
+      // Start countdown then reset
+      startArcadeCountdown(5, () => {
+        setShowScoreBreakdown(false);
+        if (isArcadeMode() && arcadeLives() > 0) {
+          reset(false);
+        }
+      });
+    } else if (outcome === "damaged") {
+      // Update player stats
+      setHumanDamaged((d) => d + 1);
+
+      // Damaged = no life lost, no points, streak reset
+      setArcadeStreak(0);
+      setLastScoreBreakdown(null);
+
+      // Start countdown then reset
+      startArcadeCountdown(5, () => {
+        if (isArcadeMode() && arcadeLives() > 0) {
+          reset(false);
+        }
+      });
+    } else if (outcome === "crashed") {
+      // Crashed = lose life, streak reset (crashed count derived from attempts - successes - damaged)
+      setArcadeStreak(0);
+      setLastScoreBreakdown(null);
+      loseLife();
+    }
+  }
+
+  /**
+   * Award an extra life
+   */
+  function awardLife() {
+    if (arcadeLives() >= MAX_LIVES) return;
+
+    setLifeGainedAnimation(true);
+    setArcadeLives((l) => l + 1);
+
+    setTimeout(() => {
+      setLifeGainedAnimation(false);
+    }, 1000);
+  }
+
+  /**
+   * Lose a life
+   */
+  function loseLife() {
+    const currentLives = arcadeLives();
+    if (currentLives <= 0) return;
+
+    const newLives = currentLives - 1;
+    setArcadeLives(newLives);
+
+    setLifeLostAnimation(true);
+    setTimeout(() => {
+      setLifeLostAnimation(false);
+    }, 500);
+
+    // Check for game over
+    if (newLives <= 0) {
+      // Game over - show countdown then end session
+      startArcadeCountdown(5, () => {
+        endArcadeSession();
+      });
+    } else {
+      // Start countdown then reset for next attempt
+      startArcadeCountdown(5, () => {
+        if (isArcadeMode()) {
+          reset(false);
+        }
+      });
+    }
+  }
+
+  /**
+   * Handle high score initial entry keyboard input
+   */
+  function handleHighScoreEntryKeyDown(key: string) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
+    const current = highScoreInitials();
+    const activeIdx = activeInitialIndex();
+
+    switch (key) {
+      case "ArrowUp":
+      case "w":
+      case "W": {
+        const currentChar = current[activeIdx];
+        const currentCharIdx = chars.indexOf(currentChar);
+        const prevCharIdx = (currentCharIdx - 1 + chars.length) % chars.length;
+        setHighScoreInitials((letters) => {
+          const updated = [...letters];
+          updated[activeIdx] = chars[prevCharIdx];
+          return updated;
+        });
+        break;
+      }
+
+      case "ArrowDown":
+      case "s":
+      case "S": {
+        const currentChar = current[activeIdx];
+        const currentCharIdx = chars.indexOf(currentChar);
+        const nextCharIdx = (currentCharIdx + 1) % chars.length;
+        setHighScoreInitials((letters) => {
+          const updated = [...letters];
+          updated[activeIdx] = chars[nextCharIdx];
+          return updated;
+        });
+        break;
+      }
+
+      case "ArrowLeft":
+        setActiveInitialIndex((idx) => Math.max(0, idx - 1));
+        break;
+
+      case "ArrowRight":
+        setActiveInitialIndex((idx) => Math.min(2, idx + 1));
+        break;
+
+      case "Enter":
+      case " ":
+        if (activeIdx < 2) {
+          setActiveInitialIndex((idx) => idx + 1);
+        } else {
+          // Submit high score
+          submitHighScore();
+        }
+        break;
+    }
+  }
+
+  /**
+   * Submit the high score with entered initials
+   */
+  function submitHighScore() {
+    const initials = highScoreInitials().join("");
+    const score = arcadeTotalScore();
+    const landings = arcadeLandingCount();
+    const world = worldId();
+
+    const newTable = addHighScore(initials, score, world, landings);
+    setHighScoreEntries(newTable.entries);
+
+    // Find the rank of the just-added score
+    const addedEntry = newTable.entries.find(
+      (e) => e.score === score && e.initials === initials,
+    );
+    setHighlightedHighScoreRank(addedEntry?.rank ?? null);
+
+    setShowHighScoreEntry(false);
+    setShowHighScoreTable(true);
+    setGamePhase("high_score_table");
+  }
+
+  /**
+   * Handle high score table keyboard input
+   */
+  function handleHighScoreTableKeyDown(key: string) {
+    if (key.toLowerCase() === "r") {
+      // Start new arcade session
+      setShowHighScoreTable(false);
+      setHighlightedHighScoreRank(null);
+      startArcadeSession();
+    } else if (key === "Escape") {
+      // Exit to normal mode
+      setShowHighScoreTable(false);
+      setHighlightedHighScoreRank(null);
+      setIsArcadeMode(false);
+      setGamePhase("orbit");
+      reset(false);
+    }
+  }
+
+  /**
+   * Exit arcade mode
+   */
+  function exitArcadeMode() {
+    setIsArcadeMode(false);
+    setShowHighScoreEntry(false);
+    setShowHighScoreTable(false);
+    setGamePhase("orbit");
+    reset(false);
+  }
+
   // Input handlers
   function handleKeyDown(key: string) {
+    // Reset idle timer on any key press
+    resetIdleTimer();
+
+    // Hide idle high scores if showing
+    if (showIdleHighScores()) {
+      setShowIdleHighScores(false);
+    }
+
     switch (key.toLowerCase()) {
       case " ":
       case "arrowup":
@@ -924,6 +1747,7 @@ export function createGameStore() {
     setGamePhase,
     startDescent,
     canAbort,
+    controlsLocked,
     initiateAbort,
     completeAbort,
 
@@ -977,6 +1801,7 @@ export function createGameStore() {
     updateFlightLogger,
     finalizeFlightLog,
     recordAbortInLog,
+    recordAbortOutcome,
     exportFlightRecords,
     getFlightStats,
     clearFlightRecords,
@@ -992,6 +1817,41 @@ export function createGameStore() {
     // GNC Autopilot
     gncState,
     setGNCState,
+
+    // Arcade Mode
+    isArcadeMode,
+    arcadeLives,
+    arcadeTotalScore,
+    arcadeStreak,
+    arcadeLandingCount,
+    arcadeCountdown,
+    lastScoreBreakdown,
+    showScoreBreakdown,
+    lifeLostAnimation,
+    lifeGainedAnimation,
+    showGameOver,
+    startArcadeSession,
+    endArcadeSession,
+    recordArcadeResult,
+    exitArcadeMode,
+
+    // High Score Entry
+    showHighScoreEntry,
+    newHighScoreRank,
+    highScoreInitials,
+    activeInitialIndex,
+    handleHighScoreEntryKeyDown,
+    submitHighScore,
+
+    // High Score Table
+    showHighScoreTable,
+    highlightedHighScoreRank,
+    highScoreEntries,
+    handleHighScoreTableKeyDown,
+
+    // Idle high scores
+    showIdleHighScores,
+    resetIdleTimer,
   };
 }
 

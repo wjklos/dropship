@@ -6,7 +6,7 @@ import {
   onCleanup,
 } from "solid-js";
 import type { Vec2, LandingPad } from "../lib/types";
-import type { WorldId } from "../lib/worlds";
+import type { WorldId } from "../lib/worldRegistry";
 
 interface DebrisPiece {
   id: number;

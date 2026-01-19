@@ -28,7 +28,13 @@ export {
 } from "./basic";
 
 // GNC autopilot (primary system)
-export { createGNCState, computeGNCAutopilot } from "./gnc";
+export {
+  createGNCState,
+  computeGNCAutopilot,
+  triggerAbort,
+  canTriggerAbort,
+  areControlsLockedForAbort,
+} from "./gnc";
 
 // Targeting and pad selection
 export {

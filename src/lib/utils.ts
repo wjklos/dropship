@@ -1,5 +1,5 @@
 /**
- * Common utility functions for Lunar Lander
+ * Common utility functions for Dropship
  */
 
 import type { LandingPad } from "./types";

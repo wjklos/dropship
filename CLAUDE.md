@@ -1,10 +1,10 @@
-# CLAUDE.md - Lunar Lander Project
+# CLAUDE.md - Dropship Project
 
 ## Project Overview
 
-A vector-style lunar lander game built with Solid.js, inspired by the 1979 Atari arcade classic. Features authentic CRT phosphor aesthetics, Newtonian physics simulation, multi-world support (Moon/Mars), orbital mechanics with zoom levels, and a PD controller-based autopilot system capable of autonomous landing.
+A vector-style planetary lander game built with Solid.js, inspired by the 1979 Atari arcade classic. Features authentic CRT phosphor aesthetics, Newtonian physics simulation, multi-world support (Moon/Mars/Earth), orbital mechanics with zoom levels, and a PD controller-based autopilot system capable of autonomous landing.
 
-**Primary Goal**: Create a playable, visually authentic recreation of the classic Lunar Lander with modern web technologies, emphasizing the vector graphics aesthetic and adding an intelligent autopilot for demonstration purposes.
+**Primary Goal**: Create a playable, visually authentic recreation of the classic Lunar Lander experience with modern web technologies, emphasizing the vector graphics aesthetic and adding an intelligent autopilot for demonstration purposes.
 
 ---
 
@@ -334,6 +334,63 @@ DESCENT → (collision) → LANDED (success/damaged) | CRASHED
 3. **Fixed terrain seed** - Same terrain per session
 4. **Autopilot can fail** - Extreme conditions may exceed controller capability
 5. **No atmospheric drag** - Mars treated as vacuum (for now)
+
+---
+
+## Backend Integration
+
+### API Endpoint
+
+The backend API is deployed at `https://dropship.configtree.com`.
+
+### Environment Variables
+
+Create a `.env` file (or configure in your deployment):
+
+```bash
+# API Configuration
+VITE_API_URL=https://dropship.configtree.com
+
+# Cognito Authentication (public values - not secrets)
+VITE_COGNITO_USER_POOL_ID=us-east-2_XBnvpusfc
+VITE_COGNITO_CLIENT_ID=1k0ba7j0iuh97lmkpefumddibn
+VITE_COGNITO_DOMAIN=https://dropship-auth.auth.us-east-2.amazoncognito.com
+VITE_COGNITO_REGION=us-east-2
+```
+
+**Note:** These Cognito values are intentionally public. User Pool ID and Client ID are designed to be in client code. Security is enforced via JWT validation on the backend and PKCE auth flow.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/flights` | POST | Submit completed flight |
+| `/flights` | GET | List user's flights |
+| `/flights/{id}` | GET | Get flight for replay |
+| `/leaderboard` | GET | Get leaderboard (`?world=moon&period=all`) |
+| `/worlds` | GET | List all worlds with configs |
+| `/worlds/{id}` | GET | Get world configuration |
+| `/spacecraft` | GET | List all spacecraft |
+| `/spacecraft/{id}` | GET | Get spacecraft configuration |
+| `/users/{id}/progression` | GET | Get user progression |
+| `/users/{id}/points` | GET | Get user points balance |
+| `/users/{id}/unlocks/worlds` | POST | Unlock a world |
+| `/users/{id}/unlocks/spacecraft` | POST | Unlock spacecraft |
+
+### Integration Tasks
+
+See GitHub Issue #1 for detailed integration checklist:
+- [ ] Create API client (`src/lib/api.ts`)
+- [ ] Submit flights to backend on completion
+- [ ] Fetch leaderboards from API
+- [ ] Load world/spacecraft configs from API
+- [ ] Add authentication flows
+- [ ] Implement offline fallback with localStorage
+
+### Backend Repository
+
+The backend source is at `github.com/wjklos/dropship-backend`.
 
 ---
 

@@ -15,7 +15,7 @@ import type {
   AutopilotMode,
   ApproachMode,
 } from "./types";
-import type { WorldId } from "./worlds";
+import type { WorldId } from "./worldRegistry";
 
 /**
  * Snapshot of lander state at a point in time
@@ -31,6 +31,44 @@ export interface TelemetryPoint {
   thrust: number; // Thrust level (0-1)
   alt: number; // Altitude above terrain
   phase: GamePhase; // Current game phase
+}
+
+/**
+ * Abort decision types
+ */
+export type AbortDecision = "orbit" | "retarget" | "brace";
+
+/**
+ * Abort outcome types
+ */
+export type AbortOutcome =
+  | "orbit_achieved"
+  | "landed_success"
+  | "landed_damaged"
+  | "crashed"
+  | "pending"; // Still in progress
+
+/**
+ * Velocity at abort time
+ */
+export interface AbortVelocity {
+  vx: number; // Horizontal velocity (px/s)
+  vy: number; // Vertical velocity (px/s)
+}
+
+/**
+ * Detailed abort event - logged each time abort is triggered
+ */
+export interface AbortEvent {
+  altitude: number; // Altitude when abort initiated (px)
+  phase: string; // GNC phase at abort time (e.g., 'coast', 'terminal_burn')
+  fuel: number; // Fuel remaining at abort (0-100)
+  velocity: AbortVelocity; // Velocity at abort time
+  decision: AbortDecision; // What the GNC decided to do
+  outcome: AbortOutcome; // Final outcome of this abort
+  originalPadIndex: number | null; // Target pad before abort (if any)
+  emergencyPadIndex: number | null; // Emergency pad selected (for retarget)
+  timestamp: number; // Time in flight when abort occurred (seconds)
 }
 
 /**
@@ -92,6 +130,7 @@ export interface FlightRecord {
     angleAtTouchdown: number; // Rotation at landing (degrees)
     timeInOrbit: number; // Time spent in orbit phase
     abortAttempts: number; // Number of abort maneuvers
+    abortEvents: AbortEvent[]; // Detailed abort event data
   };
 
   // Sampled telemetry (every 0.5 seconds)
@@ -160,6 +199,7 @@ export class FlightLogger {
         angleAtTouchdown: 0,
         timeInOrbit: 0,
         abortAttempts: 0,
+        abortEvents: [],
       },
       telemetry: [],
     };
@@ -232,7 +272,70 @@ export class FlightLogger {
   }
 
   /**
-   * Record abort attempt
+   * Start recording an abort event
+   * Call this when abort is triggered to capture initial state
+   *
+   * @param altitude - Current altitude
+   * @param phase - GNC phase at abort time
+   * @param fuel - Fuel remaining
+   * @param velocity - Current velocity
+   * @param decision - Abort decision (orbit, retarget, brace)
+   * @param originalPadIndex - Target pad before abort
+   * @param emergencyPadIndex - Emergency pad for retarget (null for orbit/brace)
+   * @param timestamp - Game time when abort occurred
+   */
+  startAbortEvent(
+    altitude: number,
+    phase: string,
+    fuel: number,
+    velocity: AbortVelocity,
+    decision: AbortDecision,
+    originalPadIndex: number | null,
+    emergencyPadIndex: number | null,
+    timestamp: number,
+  ): void {
+    this.record.metrics.abortAttempts++;
+    this.record.metrics.abortEvents.push({
+      altitude,
+      phase,
+      fuel,
+      velocity,
+      decision,
+      outcome: "pending", // Will be updated when abort completes
+      originalPadIndex,
+      emergencyPadIndex,
+      timestamp,
+    });
+  }
+
+  /**
+   * Complete the most recent abort event with its outcome
+   * Call this when abort resolves (orbit achieved, landed, or crashed)
+   *
+   * @param outcome - Final outcome of the abort
+   */
+  completeAbortEvent(outcome: AbortOutcome): void {
+    const events = this.record.metrics.abortEvents;
+    if (events.length > 0) {
+      const lastEvent = events[events.length - 1];
+      if (lastEvent.outcome === "pending") {
+        lastEvent.outcome = outcome;
+      }
+    }
+  }
+
+  /**
+   * Check if there's a pending abort event
+   */
+  hasPendingAbort(): boolean {
+    const events = this.record.metrics.abortEvents;
+    if (events.length === 0) return false;
+    return events[events.length - 1].outcome === "pending";
+  }
+
+  /**
+   * Legacy method - just increments counter without detailed tracking
+   * @deprecated Use startAbortEvent() instead for detailed tracking
    */
   recordAbort(): void {
     this.record.metrics.abortAttempts++;
@@ -297,7 +400,7 @@ export class FlightLogger {
 /**
  * Flight log storage - persists to localStorage
  */
-const STORAGE_KEY = "lunar-lander-flight-logs";
+const STORAGE_KEY = "dropship-flight-logs";
 const MAX_STORED_FLIGHTS = 1000;
 
 /**
@@ -343,7 +446,7 @@ export function exportFlightRecords(): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `lunar-lander-flights-${new Date().toISOString().split("T")[0]}.json`;
+  a.download = `dropship-flights-${new Date().toISOString().split("T")[0]}.json`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

@@ -30,6 +30,16 @@ import {
 import { calculateHorizontalError, getPadCenter } from "../utils";
 import { DEFAULT_GAINS } from "./gains";
 import type { GNCState } from "./types";
+import {
+  assessAbortOptions,
+  initializeAbort,
+  executeAbortToOrbit,
+  executeAbortRetarget,
+  executeAbortBrace,
+  isOrbitAchieved,
+  resetAbortState,
+  isAbortPhase,
+} from "./abort";
 
 /**
  * Create initial GNC state
@@ -38,6 +48,7 @@ import type { GNCState } from "./types";
  */
 export function createGNCState(): GNCState {
   return {
+    // Normal descent state
     phase: "orbit_wait",
     solution: null,
     solutionAge: 0,
@@ -50,6 +61,14 @@ export function createGNCState(): GNCState {
     deorbitTimingDelta: null,
     terminalBurnStarted: false,
     lastGuidance: null,
+    // Abort state
+    abortDecision: null,
+    abortToOrbitSubPhase: null,
+    emergencyPadIndex: null,
+    abortStartAltitude: null,
+    abortStartFuel: null,
+    abortStartVelocity: null,
+    originalPadIndex: null,
   };
 }
 
@@ -82,6 +101,14 @@ export function computeGNCAutopilot(
 ): { command: AutopilotCommand; newState: GNCState } {
   const altitude = getAltitude(lander.position, terrain, config.width);
   const state = { ...gncState };
+
+  // ============================================
+  // ABORT PHASE HANDLING
+  // ============================================
+  // If in an abort phase, handle it separately from normal descent
+  if (isAbortPhase(state.phase)) {
+    return handleAbortPhase(lander, terrain, pads, config, state, gains);
+  }
 
   // Get target pad
   const targetPad = pads[state.targetPadIndex] || pads[0];
@@ -621,4 +648,188 @@ function applySafetyOverrides(
   }
 
   return thrust;
+}
+
+// ============================================
+// ABORT SYSTEM FUNCTIONS
+// ============================================
+
+/**
+ * Trigger abort from normal descent
+ *
+ * This is called when the player (or an auto-abort event) triggers an abort.
+ * It assesses the situation and transitions to the appropriate abort phase.
+ *
+ * @param state - GNC state to modify
+ * @param lander - Current lander state
+ * @param pads - Available landing pads
+ * @param config - Game configuration
+ * @param terrain - Terrain for calculations
+ * @returns true if abort was initiated, false if not possible
+ */
+export function triggerAbort(
+  state: GNCState,
+  lander: LanderState,
+  pads: LandingPad[],
+  config: GameConfig,
+  terrain: TerrainPoint[],
+): boolean {
+  // Can't abort if already in abort or already landed
+  if (isAbortPhase(state.phase) || state.phase === "touchdown") {
+    return false;
+  }
+
+  const altitude = getAltitude(lander.position, terrain, config.width);
+
+  // Assess abort options
+  const assessment = assessAbortOptions(lander, pads, config, terrain);
+
+  // Initialize abort state
+  initializeAbort(state, lander, altitude, assessment);
+
+  return true;
+}
+
+/**
+ * Handle abort phases
+ *
+ * Routes to the appropriate abort execution function based on current phase.
+ *
+ * @param lander - Current lander state
+ * @param terrain - Terrain
+ * @param pads - Landing pads
+ * @param config - Game configuration
+ * @param state - GNC state
+ * @param gains - Autopilot gains
+ * @returns Command and updated state
+ */
+function handleAbortPhase(
+  lander: LanderState,
+  terrain: TerrainPoint[],
+  pads: LandingPad[],
+  config: GameConfig,
+  state: GNCState,
+  gains: AutopilotGains,
+): { command: AutopilotCommand; newState: GNCState } {
+  let command: AutopilotCommand;
+
+  switch (state.phase) {
+    case "abort_assess":
+      // Quick assessment phase - should transition immediately
+      // This handles the case where we need to re-assess mid-abort
+      const assessment = assessAbortOptions(lander, pads, config, terrain);
+      const altitude = getAltitude(lander.position, terrain, config.width);
+      initializeAbort(state, lander, altitude, assessment);
+      // Fall through to execute the chosen abort type
+      return handleAbortPhase(lander, terrain, pads, config, state, gains);
+
+    case "abort_to_orbit":
+      command = executeAbortToOrbit(lander, state, config, terrain);
+
+      // Check if orbit achieved and reoriented - if so, reset to orbit_wait
+      const orbitAchieved = isOrbitAchieved(lander, state, config, terrain);
+
+      // Debug: Log reorient progress
+      if (state.abortToOrbitSubPhase === "reorient") {
+        const retrogradeAngle = -Math.PI / 2;
+        let rotationError = lander.rotation - retrogradeAngle;
+        while (rotationError > Math.PI) rotationError -= 2 * Math.PI;
+        while (rotationError < -Math.PI) rotationError += 2 * Math.PI;
+
+        console.log("[Abort] Reorient check:", {
+          rotation: (lander.rotation * 180 / Math.PI).toFixed(1) + "°",
+          targetRotation: "-90°",
+          rotationError: (rotationError * 180 / Math.PI).toFixed(1) + "°",
+          angularVelocity: lander.angularVelocity.toFixed(2),
+          isAligned: Math.abs(rotationError) < 0.1,
+          isStable: Math.abs(lander.angularVelocity) < 0.5,
+          orbitAchieved,
+        });
+      }
+
+      if (orbitAchieved) {
+        console.log("[Abort] ORBIT ACHIEVED & ORIENTED! Transitioning to orbit_wait");
+        resetAbortState(state);
+        state.phase = "orbit_wait";
+        state.targetPadLocked = false;
+        state.deorbitBurnComplete = false;
+        state.solution = null;
+      }
+      break;
+
+    case "abort_retarget":
+      // Abort retarget: Emergency pad is already set as target
+      // Transition immediately to normal GNC landing (coast phase)
+      // The autopilot will execute a normal landing approach to the emergency pad
+      // Player stays locked out until landing is complete
+      console.log("[Abort] Retarget: transitioning to normal landing on emergency pad", state.emergencyPadIndex);
+      state.phase = "coast";
+      // Keep abort state intact so we know this is an abort landing
+      // (don't call resetAbortState - we need to track this was an abort)
+      // Fall through to coast handling below (will be handled next frame)
+      command = { thrust: 0, rotation: 0 };
+      break;
+
+    case "abort_brace":
+      command = executeAbortBrace(lander, config);
+      break;
+
+    default:
+      // Shouldn't reach here, but provide safe default
+      command = { thrust: 0, rotation: 0 };
+  }
+
+  // Apply attitude control gains
+  const rotationCommand =
+    gains.attitude.kp * command.rotation -
+    gains.attitude.kd * lander.angularVelocity * 0.5;
+  const finalRotation = Math.max(-1, Math.min(1, rotationCommand));
+
+  return {
+    command: {
+      thrust: command.thrust,
+      rotation: finalRotation,
+    },
+    newState: state,
+  };
+}
+
+/**
+ * Check if abort is currently possible
+ *
+ * Abort is possible when:
+ * - Not already in an abort phase
+ * - Not on the ground (touchdown)
+ * - Have some fuel remaining
+ */
+export function canTriggerAbort(state: GNCState, lander: LanderState): boolean {
+  if (isAbortPhase(state.phase)) return false;
+  if (state.phase === "touchdown") return false;
+  if (lander.fuel <= 0) return false;
+  return true;
+}
+
+/**
+ * Check if player controls should be locked due to abort
+ *
+ * During abort, player controls should be locked until:
+ * - Orbit is achieved (abort_to_orbit) - then controls unlocked, player resumes
+ * - Landing is complete (abort_retarget or abort_brace) - locked throughout landing
+ *
+ * For abort_retarget, controls stay locked even after transitioning to normal
+ * landing phases (coast, terminal_burn, touchdown) because it's an emergency landing.
+ */
+export function areControlsLockedForAbort(state: GNCState): boolean {
+  // Locked during explicit abort phases
+  if (isAbortPhase(state.phase)) {
+    return true;
+  }
+
+  // Also locked if this is an abort-initiated landing
+  // (abortDecision is "retarget" or "brace" means we're in emergency landing mode)
+  if (state.abortDecision === "retarget" || state.abortDecision === "brace") {
+    return true;
+  }
+
+  return false;
 }

@@ -1,7 +1,7 @@
 {
-  "name": "lunar-lander",
+  "name": "dropship",
   "version": "1.0.0",
-  "description": "Vector-style Lunar Lander game with autopilot",
+  "description": "Vector-style planetary lander game with autopilot",
   "type": "module",
   "scripts": {
     "dev": "vite",

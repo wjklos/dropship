@@ -7,7 +7,7 @@
 
 import { Component, For, createMemo } from "solid-js";
 import type { WindBand } from "../lib/types";
-import type { AtmosphereConfig } from "../lib/worlds";
+import type { AtmosphereConfig } from "../lib/worldRegistry";
 import { getWindBandsForDisplay } from "../lib/atmosphere";
 
 interface WindBandsProps {

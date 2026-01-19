@@ -7,7 +7,7 @@
 
 import type { WindBand } from "./types";
 
-export type WorldId = "moon" | "mars";
+export type WorldId = "moon" | "mars" | "earth";
 
 // Location names for landing zones
 // Moon: Apollo landing sites, craters, maria, and notable features
@@ -68,6 +68,35 @@ export const MARS_LOCATIONS: string[] = [
   "Green Valley",
 ];
 
+// Earth: Oceans, seas, spaceports, and island locations
+export const EARTH_LOCATIONS: string[] = [
+  "Pacific Ocean",
+  "Atlantic Ocean",
+  "Cape Canaveral",
+  "Boca Chica",
+  "Kennedy Space Center",
+  "Vandenberg SFB",
+  "Kwajalein Atoll",
+  "Mahia Peninsula",
+  "Kourou",
+  "Baikonur",
+  "Vostochny",
+  "Tanegashima",
+  "Wallops Island",
+  "Sea of Tranquility", // Easter egg - Moon reference
+  "Starbase",
+  "Indian Ocean",
+  "Mediterranean Sea",
+  "Caribbean Sea",
+  "Gulf of Mexico",
+  "North Sea",
+  "Coral Sea",
+  "Barents Sea",
+  "South China Sea",
+  "Bay of Bengal",
+  "Just Read The Instructions", // SpaceX droneship
+];
+
 export interface AutopilotGains {
   attitude: { kp: number; kd: number };
   horizontal: { kp: number; kd: number };
@@ -84,6 +113,8 @@ export interface WorldColors {
   padUnviable: string; // Unreachable landing pad
   atmosphere?: string; // Atmosphere haze color (null for vacuum)
   dust: string; // Dust/regolith color for landing effects
+  water?: string; // Water fill color (Earth only)
+  waterStroke?: string; // Water surface stroke color (Earth only)
 }
 
 export interface AtmosphereConfig {
@@ -103,6 +134,8 @@ export interface WorldConfig {
   colors: WorldColors;
   autopilotGains: AutopilotGains;
   atmosphere?: AtmosphereConfig; // Optional atmosphere with wind/drag
+  hasWater?: boolean; // Earth-specific: mixed land/water terrain
+  hasDawnSky?: boolean; // Earth-specific: dawn gradient background
 }
 
 export const WORLDS: Record<WorldId, WorldConfig> = {
@@ -190,6 +223,71 @@ export const WORLDS: Record<WorldId, WorldConfig> = {
           windSpeed: -3, // Light variable surface wind
           turbulence: 0.6,
           particleColor: "#bb6644", // Rust/brown
+        },
+      ],
+    },
+  },
+  earth: {
+    id: "earth",
+    name: "TERRA",
+    displayName: "Earth",
+    gravity: 122, // 6x Moon's 20 (represents 9.81 m/s²)
+    realGravity: 9.81, // m/s²
+    orbitalVelocity: 85, // Slower due to drag
+    orbitalAltitude: 800, // Same start altitude
+    maxThrust: 366, // 3x gravity for consistent TWR across worlds (~2.4G felt)
+    colors: {
+      primary: "#00E5FF", // Electric cyan
+      secondary: "#0099CC",
+      terrain: "#2C5F2D", // Deep earth green (land)
+      terrainStroke: "#3D7A3D",
+      sky: "#0A0A1A", // Will be overridden by gradient in EarthSky component
+      padViable: "#00ff88", // Keep pads consistent green
+      padUnviable: "#ff3333",
+      // Earth atmosphere - blue haze
+      atmosphere: "rgba(100, 180, 255, 0.3)",
+      dust: "rgba(120, 180, 220, 0.8)", // Blue-gray water spray
+      water: "#1A4D6D", // Deep ocean blue
+      waterStroke: "#2A6D8D", // Lighter water surface
+    },
+    autopilotGains: {
+      attitude: { kp: 5.0, kd: 3.0 }, // More aggressive for high gravity
+      horizontal: { kp: 0.03, kd: 0.45 },
+      vertical: { kp: 1.2, kd: 0.25 },
+    },
+    // Earth-specific features
+    hasWater: true,
+    hasDawnSky: true,
+    // Earth atmosphere - strong drag and wind
+    atmosphere: {
+      dragCoefficient: 0.35, // Significant atmospheric braking
+      windBands: [
+        // Upper atmosphere (400-600px) - jet stream
+        {
+          altitudeMin: 400,
+          altitudeMax: 600,
+          density: 0.5,
+          windSpeed: 25, // Fast high-altitude winds
+          turbulence: 0.3,
+          particleColor: "#d0e8ff", // Pale blue
+        },
+        // Mid atmosphere (200-400px) - turbulent zone
+        {
+          altitudeMin: 200,
+          altitudeMax: 400,
+          density: 0.7,
+          windSpeed: -15, // Opposite direction shear
+          turbulence: 0.6,
+          particleColor: "#a0c8e8", // Light blue
+        },
+        // Low atmosphere (0-200px) - surface winds
+        {
+          altitudeMin: 0,
+          altitudeMax: 200,
+          density: 0.9,
+          windSpeed: 8, // Moderate surface wind
+          turbulence: 0.5,
+          particleColor: "#80b0d0", // Blue-gray
         },
       ],
     },

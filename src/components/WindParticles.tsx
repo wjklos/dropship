@@ -14,7 +14,7 @@ import {
   onMount,
   onCleanup,
 } from "solid-js";
-import type { AtmosphereConfig } from "../lib/worlds";
+import type { AtmosphereConfig } from "../lib/worldRegistry";
 import { getWindBandsForDisplay } from "../lib/atmosphere";
 
 interface WindParticlesProps {

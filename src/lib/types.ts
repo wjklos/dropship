@@ -1,4 +1,4 @@
-import type { WorldId } from "./worlds";
+import type { WorldId } from "./worldRegistry";
 
 // Vector 2D
 export interface Vec2 {
@@ -19,7 +19,15 @@ export type FailureReason =
 export type LandingOutcome = "success" | "damaged" | "crashed";
 
 // Game phase for orbital mechanics
-export type GamePhase = "orbit" | "descent" | "abort" | "landed" | "crashed";
+export type GamePhase =
+  | "orbit"
+  | "descent"
+  | "abort"
+  | "landed"
+  | "crashed"
+  | "game_over"
+  | "high_score_entry"
+  | "high_score_table";
 
 // Lander state
 export interface LanderState {
@@ -45,6 +53,7 @@ export interface LanderState {
 export interface TerrainPoint {
   x: number;
   y: number;
+  isWater?: boolean; // Earth-specific: true if this segment is water
 }
 
 // Landing pad with difficulty multiplier
@@ -55,6 +64,9 @@ export interface LandingPad {
   multiplier: 1 | 2 | 3 | 4 | 5; // Difficulty/reward multiplier (1=easy, 5=hard)
   occupied: boolean; // If true, a rocket is on this pad - cannot land here
   designation: string; // Pad designation within region (e.g., "A", "B", "C")
+  isFloating?: boolean; // Earth-specific: true if pad floats on water
+  wavePhase?: number; // Earth-specific: offset for wave animation
+  baseY?: number; // Earth-specific: original Y before wave motion
 }
 
 // Viability status for each pad
@@ -147,6 +159,29 @@ export interface GameState {
 export interface AutopilotCommand {
   thrust: number; // 0-1
   rotation: number; // -1 to 1 (left/right)
+}
+
+// Score breakdown for arcade mode landing
+export interface ScoreBreakdown {
+  baseScore: number; // 1000
+  padMultiplier: number; // 1-5
+  fuelMultiplier: number; // 1.0-2.0
+  precisionMultiplier: number; // 1.0-1.5
+  speedMultiplier: number; // 1.0-1.3
+  streakBonus: number; // 500 × streak count
+  worldMultiplier: number; // 1.0 (Moon) or 1.5 (Mars)
+  totalScore: number; // Final calculated score
+}
+
+// Arcade mode state for lives system
+export interface ArcadeState {
+  lives: number;
+  maxLives: number;
+  totalScore: number;
+  consecutiveSuccesses: number; // For life awards (every 5)
+  streak: number; // Current streak for scoring
+  isArcadeMode: boolean; // True when playing with lives
+  gameOverReason: "out_of_lives" | null;
 }
 
 // Wind band definition for atmospheric worlds

@@ -10,14 +10,47 @@ import type { TwoBurnSolution, GuidanceState } from "../trajectory";
 /**
  * GNC Autopilot Phase
  * Represents the current state in the landing state machine
+ *
+ * Normal descent phases:
+ *   orbit_wait → orbit_align → deorbit_burn → coast → terminal_burn → touchdown
+ *
+ * Abort phases (entered when abort triggered):
+ *   abort_assess → (abort_to_orbit | abort_retarget | abort_brace)
  */
 export type GNCPhase =
+  // Normal descent phases
   | "orbit_wait"
   | "orbit_align"
   | "deorbit_burn"
   | "coast"
   | "terminal_burn"
-  | "touchdown";
+  | "touchdown"
+  // Abort phases
+  | "abort_assess"    // Calculating best abort option (orbit vs emergency land vs brace)
+  | "abort_to_orbit"  // Executing return to orbit maneuver
+  | "abort_retarget"  // Redirecting to best available emergency pad
+  | "abort_brace";    // Minimizing crash damage (insufficient fuel for other options)
+
+/**
+ * Abort decision made during abort_assess phase
+ */
+export type AbortDecision = "orbit" | "retarget" | "brace" | null;
+
+/**
+ * Sub-phase for abort_to_orbit maneuver
+ * The orbit abort is a multi-step sequence:
+ * 1. arrest_descent - Full thrust to stop downward velocity
+ * 2. prograde_burn - Build horizontal velocity toward orbit
+ * 3. coast_to_apoapsis - Engine off, coast to highest point
+ * 4. circularize - Small burn to achieve stable orbit
+ * 5. reorient - Rotate to retrograde stance (orbital position)
+ */
+export type AbortToOrbitSubPhase =
+  | "arrest_descent"
+  | "prograde_burn"
+  | "coast_to_apoapsis"
+  | "circularize"
+  | "reorient";
 
 /**
  * GNC Autopilot state - persists across frames
@@ -61,6 +94,32 @@ export interface GNCState {
 
   /** Last computed guidance state for telemetry/debugging */
   lastGuidance: GuidanceState | null;
+
+  // ========== Abort State ==========
+
+  /** Decision made during abort_assess: which abort strategy to use */
+  abortDecision: AbortDecision;
+
+  /** Current sub-phase for abort_to_orbit maneuver */
+  abortToOrbitSubPhase: AbortToOrbitSubPhase | null;
+
+  /** Target emergency pad index for abort_retarget */
+  emergencyPadIndex: number | null;
+
+  /** Altitude when abort was initiated (for telemetry) */
+  abortStartAltitude: number | null;
+
+  /** Fuel remaining when abort was initiated (for telemetry) */
+  abortStartFuel: number | null;
+
+  /** Velocity when abort was initiated (for telemetry) */
+  abortStartVelocity: { vx: number; vy: number } | null;
+
+  /** Original target pad before abort (for telemetry) */
+  originalPadIndex: number | null;
+
+  /** Flag set when orbit is stabilized during abort_to_orbit (triggers gravity disable) */
+  orbitStabilized?: boolean;
 }
 
 /**

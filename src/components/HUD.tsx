@@ -6,9 +6,10 @@ import type {
   FailureReason,
   LandingOutcome,
   WindEffect,
+  ScoreBreakdown,
 } from "../lib/types";
-import type { WorldId } from "../lib/worlds";
-import { WORLDS } from "../lib/worlds";
+import { WORLDS, getAllWorlds, isWorldUnlocked, type WorldId } from "../lib/worldRegistry";
+import LifeIndicator from "./LifeIndicator";
 
 interface HUDProps {
   altitude: number;
@@ -54,6 +55,15 @@ interface HUDProps {
   onSelectAutopilot: (mode: AutopilotMode) => void;
   regionName: string;
   landedPadDesignation: string | null;
+  // Arcade mode props
+  isArcadeMode: boolean;
+  arcadeLives: number;
+  arcadeTotalScore: number;
+  arcadeStreak: number;
+  lifeLostAnimation: boolean;
+  lifeGainedAnimation: boolean;
+  arcadeCountdown: number | null;
+  onStartArcade: () => void;
 }
 
 // Failure reason display messages
@@ -144,6 +154,19 @@ const HUD: Component<HUDProps> = (props) => {
       {/* Game phase indicator */}
       <div class={`hud-phase ${props.gamePhase}`}>{phaseDisplay()}</div>
 
+      {/* Arcade mode life indicator - positioned below header */}
+      <Show when={props.isArcadeMode}>
+        <div class="arcade-lives-container">
+          <LifeIndicator
+            lives={props.arcadeLives}
+            maxLives={5}
+            worldId={props.currentWorldId}
+            lifeLostAnimation={props.lifeLostAnimation}
+            lifeGainedAnimation={props.lifeGainedAnimation}
+          />
+        </div>
+      </Show>
+
       {/* Top telemetry bar */}
       <div class="hud-top">
         <div class="hud-title">
@@ -217,16 +240,24 @@ const HUD: Component<HUDProps> = (props) => {
         <div class="world-select">
           <div class="world-select-label">SELECT DESTINATION</div>
           <div class="world-buttons">
-            <For each={Object.values(WORLDS)}>
-              {(world) => (
-                <button
-                  class={`world-btn ${props.currentWorldId === world.id ? "active" : ""}`}
-                  style={{ "--world-color": world.colors.primary }}
-                  onClick={() => props.onSelectWorld(world.id)}
-                >
-                  {world.name}
-                </button>
-              )}
+            <For each={getAllWorlds()}>
+              {(world) => {
+                const unlocked = isWorldUnlocked(world.id);
+                return (
+                  <button
+                    class={`world-btn ${props.currentWorldId === world.id ? "active" : ""} ${!unlocked ? "locked" : ""}`}
+                    style={{ "--world-color": world.colors.primary }}
+                    onClick={() => unlocked && props.onSelectWorld(world.id)}
+                    disabled={!unlocked}
+                    title={!unlocked ? "Complete more landings to unlock" : world.displayName}
+                  >
+                    {world.name}
+                    <Show when={!unlocked}>
+                      <span class="lock-icon">🔒</span>
+                    </Show>
+                  </button>
+                );
+              }}
             </For>
           </div>
         </div>
@@ -298,6 +329,15 @@ const HUD: Component<HUDProps> = (props) => {
             [0] DEMO
           </button>
         </div>
+        {/* Arcade mode button - only show when not in arcade mode */}
+        <Show when={!props.isArcadeMode && props.gamePhase === "orbit"}>
+          <button
+            class="mode-btn arcade-btn"
+            onClick={() => props.onStartArcade()}
+          >
+            [9] ARCADE
+          </button>
+        </Show>
       </div>
 
       {/* Approach mode selector - only show when autopilot is land or demo */}
@@ -365,14 +405,24 @@ const HUD: Component<HUDProps> = (props) => {
 
       <Show when={props.autopilotMode === "off"}>
         <div class="hud-stats-panel">
-          <div class="stats-label">HUMAN STATS</div>
+          <div class="stats-label">
+            {props.isArcadeMode ? "PLAYER STATS" : "HUMAN STATS"}
+          </div>
           <div class="stats-row score">
-            <span class="stat-value">{props.humanScore}</span>
+            <span class="stat-value">
+              {props.isArcadeMode ? props.arcadeTotalScore : props.humanScore}
+            </span>
             <span class="stat-label">SCORE</span>
           </div>
           <div class="stats-row streak">
             <span class="stat-value">
-              {props.humanStreak > 0 ? `${props.humanStreak}x` : "-"}
+              {props.isArcadeMode
+                ? props.arcadeStreak > 0
+                  ? `${props.arcadeStreak}x`
+                  : "-"
+                : props.humanStreak > 0
+                  ? `${props.humanStreak}x`
+                  : "-"}
             </span>
             <span class="stat-label">STREAK</span>
           </div>
@@ -405,10 +455,23 @@ const HUD: Component<HUDProps> = (props) => {
       {/* Crash message with failure reason */}
       <Show when={!props.alive && props.outcome === "crashed"}>
         <div class="message crash">
-          <div class="message-title">CONTACT LIGHT</div>
+          <div class="message-title">
+            {props.isArcadeMode && props.arcadeLives <= 0
+              ? "GAME OVER"
+              : "CONTACT LIGHT"}
+          </div>
           <div class="message-subtitle">{failureMessage().title}</div>
           <div class="failure-reason">{failureMessage().subtitle}</div>
-          <div class="message-hint">Press [R] to restart</div>
+          <Show when={props.isArcadeMode && props.arcadeCountdown !== null}>
+            <div class="message-hint countdown">
+              {props.arcadeLives > 0
+                ? `NEXT ATTEMPT IN ${props.arcadeCountdown}...`
+                : `HIGH SCORES IN ${props.arcadeCountdown}...`}
+            </div>
+          </Show>
+          <Show when={!props.isArcadeMode}>
+            <div class="message-hint">Press [R] to restart</div>
+          </Show>
         </div>
       </Show>
 
@@ -418,7 +481,14 @@ const HUD: Component<HUDProps> = (props) => {
           <div class="message-title">TOUCHDOWN</div>
           <div class="message-subtitle">SPACECRAFT DAMAGED</div>
           <div class="failure-reason">Landed on rough terrain - not on pad</div>
-          <div class="message-hint">Press [R] to restart</div>
+          <Show when={props.isArcadeMode && props.arcadeCountdown !== null}>
+            <div class="message-hint countdown">
+              NEXT ATTEMPT IN {props.arcadeCountdown}...
+            </div>
+          </Show>
+          <Show when={!props.isArcadeMode}>
+            <div class="message-hint">Press [R] to restart</div>
+          </Show>
         </div>
       </Show>
 
@@ -429,7 +499,14 @@ const HUD: Component<HUDProps> = (props) => {
           <div class="message-subtitle">
             {props.regionName} - PAD {props.landedPadDesignation}
           </div>
-          <div class="message-hint">Press [R] for new mission</div>
+          <Show when={props.isArcadeMode && props.arcadeCountdown !== null}>
+            <div class="message-hint countdown">
+              NEXT LEVEL IN {props.arcadeCountdown}...
+            </div>
+          </Show>
+          <Show when={!props.isArcadeMode}>
+            <div class="message-hint">Press [R] for new mission</div>
+          </Show>
         </div>
       </Show>
 
@@ -446,6 +523,9 @@ const HUD: Component<HUDProps> = (props) => {
           <span>[X] Lock Target</span>
         </Show>
         <span>[L] Log</span>
+        <Show when={!props.isArcadeMode}>
+          <span>[9] Arcade</span>
+        </Show>
       </div>
     </div>
   );

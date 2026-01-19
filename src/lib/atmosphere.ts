@@ -19,7 +19,7 @@
  */
 
 import type { WindBand, WindEffect, Vec2 } from "./types";
-import type { AtmosphereConfig } from "./worlds";
+import type { AtmosphereConfig } from "./worldRegistry";
 
 // Noise seed for turbulence (changes each session)
 let turbulenceSeed = Math.random() * 1000;

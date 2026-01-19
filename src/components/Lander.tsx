@@ -1,6 +1,6 @@
 import { Component, createMemo, Show, For } from "solid-js";
 import type { LanderState, ZoomLevel } from "../lib/types";
-import type { WorldId } from "../lib/worlds";
+import type { WorldId } from "../lib/worldRegistry";
 
 interface LanderProps {
   lander: LanderState;
@@ -62,10 +62,21 @@ const Lander: Component<LanderProps> = (props) => {
     return `translate(${x}, ${y}) rotate(${rotation}) scale(${scale})`;
   });
 
-  // Landing leg deployment for Mars lander
-  // Legs deploy when altitude < 80px, fully deployed at < 40px
+  // Landing leg deployment for Mars and Earth landers
+  // Mars: Legs deploy when altitude < 80px, fully deployed at < 40px
+  // Earth: Struts deploy when altitude < 100px, fully deployed at < 40px
   const legDeployment = createMemo(() => {
-    if (props.worldId !== "mars") return 1; // Moon lander always has legs out
+    if (props.worldId === "moon") return 1; // Moon lander always has legs out
+
+    if (props.worldId === "earth") {
+      // Earth dropship struts deploy earlier (higher altitude)
+      if (props.altitude > 100) return 0; // Struts stowed
+      if (props.altitude < 40) return 1; // Fully deployed
+      // Animate between 100 and 40
+      return (100 - props.altitude) / 60;
+    }
+
+    // Mars lander deployment
     if (props.altitude > 80) return 0; // Legs stowed
     if (props.altitude < 40) return 1; // Fully deployed
     // Animate between 80 and 40
@@ -317,6 +328,100 @@ const Lander: Component<LanderProps> = (props) => {
             y1="-5"
             x2="17"
             y2="-5"
+            stroke="var(--vector-primary)"
+            stroke-width="0.75"
+          />
+        </g>
+      </Show>
+
+      {/* Earth Dropship - sleek aerodynamic delta design */}
+      <Show when={props.worldId === "earth"}>
+        <g class="lander-body" filter="url(#glow)">
+          {/* Aerodynamic delta fuselage */}
+          <path
+            d="M 0,-22 L -12,-8 L -10,10 L 10,10 L 12,-8 Z"
+            fill="none"
+            stroke="var(--vector-primary)"
+            stroke-width="1.5"
+          />
+
+          {/* Cockpit canopy */}
+          <path
+            d="M -5,-18 Q 0,-24 5,-18 L 5,-10 L -5,-10 Z"
+            fill="none"
+            stroke="var(--vector-primary)"
+            stroke-width="1.5"
+          />
+
+          {/* Retractable landing struts with deployment animation */}
+          <Show when={legDeployment() > 0}>
+            <g class="landing-struts">
+              {/* Left strut - extends diagonally down and left */}
+              <line
+                x1="-8"
+                y1="8"
+                x2={-8 - legDeployment() * 12}
+                y2={8 + legDeployment() * 12}
+                stroke="var(--vector-primary)"
+                stroke-width="1.5"
+                opacity={0.3 + legDeployment() * 0.7}
+              />
+              {/* Left strut foot pad */}
+              <circle
+                cx={-8 - legDeployment() * 12}
+                cy={8 + legDeployment() * 12}
+                r="2"
+                fill="none"
+                stroke="var(--vector-primary)"
+                stroke-width="1"
+                opacity={legDeployment()}
+              />
+
+              {/* Right strut - extends diagonally down and right */}
+              <line
+                x1="8"
+                y1="8"
+                x2={8 + legDeployment() * 12}
+                y2={8 + legDeployment() * 12}
+                stroke="var(--vector-primary)"
+                stroke-width="1.5"
+                opacity={0.3 + legDeployment() * 0.7}
+              />
+              {/* Right strut foot pad */}
+              <circle
+                cx={8 + legDeployment() * 12}
+                cy={8 + legDeployment() * 12}
+                r="2"
+                fill="none"
+                stroke="var(--vector-primary)"
+                stroke-width="1"
+                opacity={legDeployment()}
+              />
+            </g>
+          </Show>
+
+          {/* Main engine nozzle */}
+          <path
+            d="M -5,10 L -4,14 L 4,14 L 5,10"
+            fill="none"
+            stroke="var(--vector-primary)"
+            stroke-width="1"
+          />
+
+          {/* RCS thrusters */}
+          <line
+            x1="-12"
+            y1="-2"
+            x2="-15"
+            y2="-2"
+            stroke="var(--vector-primary)"
+            stroke-width="0.75"
+          />
+          <line
+            x1="12"
+            y1="-2"
+            x2="15"
+            y2="-2"
             stroke="var(--vector-primary)"
             stroke-width="0.75"
           />
